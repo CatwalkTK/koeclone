@@ -22,3 +22,6 @@ dev = [
 
 [tool.uv.sources]
 chatterbox-tts = { git = "https://github.com/resemble-ai/chatterbox.git", rev = "5de7a54aa4e5e2baadb0182dde554908b48b85c2" }
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
