@@ -1,0 +1,42 @@
+# macOS
+.DS_Store
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Local data directory (voice profiles, consent records, DB, history)
+data/
+koeclone-data/
+
+# Model weights and caches
+models/
+model_cache/
+.cache/
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+
+# Generated / recorded audio
+*.wav
+*.mp3
+
+# Temporary files
+tmp/
+*.tmp
+*.log
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
