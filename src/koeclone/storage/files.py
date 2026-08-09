@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -82,6 +83,38 @@ def download_filename(job_id: UUID | str, generated_at: datetime) -> str:
         raise ValueError("generated_at must include a timezone")
     timestamp = generated_at.astimezone(UTC).strftime("%Y%m%d_%H%M%S")
     return f"koeclone_{timestamp}_{identifier.hex[:8]}.wav"
+
+
+def collect_deletion_targets(
+    paths: DataPaths,
+    *,
+    reference_id: UUID | str,
+    consent_id: UUID | str | None,
+    job_ids: Sequence[UUID | str],
+) -> DeletionTargets:
+    consent_audio = (
+        ()
+        if consent_id is None
+        else (storage_path(paths.consent, consent_id, ".wav"),)
+    )
+    return DeletionTargets(
+        reference_audio=(storage_path(paths.references, reference_id, ".wav"),),
+        consent_audio=consent_audio,
+        cache=(storage_path(paths.cache, reference_id, ".cache"),),
+        generated_audio=tuple(
+            storage_path(paths.generated, job_id, ".wav") for job_id in job_ids
+        ),
+        sidecars=tuple(
+            storage_path(paths.generated, job_id, ".json") for job_id in job_ids
+        ),
+        temporary=tuple(
+            sorted(
+                path
+                for path in paths.temporary.rglob("*")
+                if path.is_file() or path.is_symlink()
+            )
+        ),
+    )
 
 
 def delete_targets(data_root: Path, targets: DeletionTargets) -> None:
