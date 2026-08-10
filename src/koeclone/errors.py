@@ -27,3 +27,11 @@ class ErrorCode(str, Enum):
     ERR_PROFILE_ALREADY_EXISTS = "ERR_PROFILE_ALREADY_EXISTS"
     ERR_WATERMARK_NOT_DETECTED = "ERR_WATERMARK_NOT_DETECTED"
     ERR_INTERNAL = "ERR_INTERNAL"
+
+
+class KoecloneError(Exception):
+    """安定エラーコードを持つアプリ内例外の基底。"""
+
+    def __init__(self, code: ErrorCode) -> None:
+        self.code = code
+        super().__init__(code.value)
