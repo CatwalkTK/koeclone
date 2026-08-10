@@ -1,3 +1,4 @@
+import re
 from dataclasses import fields
 from datetime import UTC, datetime
 
@@ -22,6 +23,7 @@ def test_each_live_challenge_is_different() -> None:
     assert first != second
     assert "自分自身の声" in first
     assert "音声クローン" in first
+    assert re.search(r"確認番号は\d{8}です", first)
 
 
 def test_upload_declaration_states_ownership_and_rights() -> None:

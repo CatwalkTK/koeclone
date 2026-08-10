@@ -4,7 +4,6 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from itertools import count
 
 from koeclone.errors import ErrorCode
 
@@ -12,7 +11,6 @@ UPLOAD_RIGHTS_DECLARATION = (
     "この音声は自分自身の声であり、音声クローンを作成して利用する権利を持つことを確認します。"
 )
 _CHALLENGE_WORDS = ("あおぞら", "こもれび", "さくら", "しおかぜ", "ひまわり")
-_CHALLENGE_SEQUENCE = count(1)
 
 
 class ConsentMethod(StrEnum):
@@ -32,11 +30,10 @@ class ConsentRecord:
 
 def generate_consent_challenge() -> str:
     word = secrets.choice(_CHALLENGE_WORDS)
-    random_number = secrets.randbelow(1_000_000)
-    sequence = next(_CHALLENGE_SEQUENCE)
+    random_number = secrets.randbelow(100_000_000)
     return (
         "私は自分自身の声をこの端末の音声クローンとして登録することに同意します。"
-        f"確認語は「{word}」、確認番号は{random_number:06d}-{sequence}です。"
+        f"確認語は「{word}」、確認番号は{random_number:08d}です。"
     )
 
 
