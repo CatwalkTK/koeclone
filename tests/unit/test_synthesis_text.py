@@ -1,6 +1,9 @@
+import pytest
+
 from koeclone.domain.pronunciation import PronunciationOverride
 from koeclone.domain.synthesis_text import (
     build_synthesis_text,
+    plan_synthesis_chunks,
     split_synthesis_text,
 )
 from koeclone.errors import ErrorCode
@@ -64,3 +67,44 @@ def test_normal_mode_passes_original_text_through() -> None:
 
     assert error is None
     assert synthesis_text == original
+
+
+def test_plans_comma_heavy_text_within_targets() -> None:
+    text = "あ、い、う、え、お、" * 20
+
+    chunks = plan_synthesis_chunks(text, target_min=60, target_max=120)
+
+    assert "".join(chunks) == text
+    assert all(60 <= len(chunk) <= 120 for chunk in chunks[:-1])
+    assert len(chunks[-1]) <= 120
+
+
+def test_chunk_plan_preserves_every_character_for_varied_texts() -> None:
+    texts = (
+        "短文です。",
+        "第一。第二！第三？" * 20,
+        "句読点なし" * 60,
+        "、" * 200,
+    )
+
+    for text in texts:
+        chunks = plan_synthesis_chunks(text)
+        assert "".join(chunks) == text
+        assert all(chunks)
+
+
+def test_chunk_plan_keeps_long_unbroken_fragment_whole() -> None:
+    text = "あ" * 300
+
+    assert plan_synthesis_chunks(text) == [text]
+
+
+def test_chunk_plan_returns_empty_for_empty_text() -> None:
+    assert plan_synthesis_chunks("") == []
+
+
+def test_chunk_plan_rejects_invalid_bounds() -> None:
+    with pytest.raises(ValueError):
+        plan_synthesis_chunks("文章。", target_min=0)
+    with pytest.raises(ValueError):
+        plan_synthesis_chunks("文章。", target_min=20, target_max=10)
