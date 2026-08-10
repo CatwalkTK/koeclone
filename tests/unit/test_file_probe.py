@@ -88,6 +88,19 @@ def test_rejects_file_over_50_mb(tmp_path: Path) -> None:
     )
 
 
+def test_accepts_file_at_exactly_50_mb(tmp_path: Path) -> None:
+    path = tmp_path / "limit.wav"
+    with path.open("wb") as output:
+        output.write(WAV_HEADER)
+        output.seek(50 * 1024 * 1024 - 1)
+        output.write(b"\x00")
+
+    assert (
+        validate_audio_file(path, "audio/wav", lambda _: valid_probe("pcm_s16le"))
+        is None
+    )
+
+
 def test_rejects_probe_failure(tmp_path: Path) -> None:
     path = write_file(tmp_path / "voice.wav", WAV_HEADER)
 
@@ -134,6 +147,14 @@ def test_rejects_duration_outside_upload_range(
     result = ProbeResult("mp3", True, duration)
 
     assert validate_audio_file(path, "audio/mpeg", lambda _: result) is expected
+
+
+@pytest.mark.parametrize("duration", [10.0, 180.0])
+def test_accepts_duration_boundaries(tmp_path: Path, duration: float) -> None:
+    path = write_file(tmp_path / "voice.mp3", MP3_HEADER)
+    result = ProbeResult("mp3", True, duration)
+
+    assert validate_audio_file(path, "audio/mpeg", lambda _: result) is None
 
 
 def test_rejects_codec_mismatch(tmp_path: Path) -> None:
