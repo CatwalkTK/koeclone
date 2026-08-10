@@ -18,6 +18,7 @@ def test_accepts_japanese_pronunciation_override() -> None:
     ("reading", "expected"),
     [
         ("", ErrorCode.ERR_READING_EMPTY),
+        ("　 \t", ErrorCode.ERR_READING_EMPTY),
         ("日本ばし", ErrorCode.ERR_READING_INVALID_CHARS),
         ("にほんbashi", ErrorCode.ERR_READING_INVALID_CHARS),
         ("にほん、ばし", ErrorCode.ERR_READING_INVALID_CHARS),
@@ -35,6 +36,13 @@ def test_accepts_supported_reading_characters() -> None:
     override = PronunciationOverride("東京", 0, 2, "とうきょう・トーキョー　")
 
     assert validate_pronunciation_overrides("東京", [override]) is None
+
+
+def test_accepts_cjk_extension_kanji_surface() -> None:
+    extension_b_kanji = "\U0002000b"
+    override = PronunciationOverride(extension_b_kanji, 0, 1, "よし")
+
+    assert validate_pronunciation_overrides(extension_b_kanji, [override]) is None
 
 
 @pytest.mark.parametrize(

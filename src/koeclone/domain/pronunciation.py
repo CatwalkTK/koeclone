@@ -17,7 +17,7 @@ def validate_pronunciation_overrides(
     overrides: list[PronunciationOverride],
 ) -> ErrorCode | None:
     for override in overrides:
-        if not override.reading:
+        if not override.reading or not override.reading.strip():
             return ErrorCode.ERR_READING_EMPTY
         if not all(_is_reading_character(char) for char in override.reading):
             return ErrorCode.ERR_READING_INVALID_CHARS
@@ -48,5 +48,7 @@ def _is_kanji(character: str) -> bool:
         "\u3400" <= character <= "\u4dbf"
         or "\u4e00" <= character <= "\u9fff"
         or "\uf900" <= character <= "\ufaff"
+        or "\U00020000" <= character <= "\U0002fa1f"
+        or "\U00030000" <= character <= "\U000323af"
         or character == "々"
     )
