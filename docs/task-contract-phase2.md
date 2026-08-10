@@ -650,15 +650,21 @@ class ChatterboxEngine:
 4. **リビジョン検証**: ロード前に、ローカルHFキャッシュが解決するリビジョンが
    `EXPECTED_MODEL_REVISION` と一致することを検証する。不一致・未取得なら
    `EngineError(ErrorCode.ERR_INTERNAL)`。
-   **検証はネットワークへ出ずに行う**（`local_files_only=True` 相当、またはキャッシュの
-   `refs/main` 参照）。実現方法は Codex が選んでよいが、外部通信を発生させないこと。
+   **検証はネットワークへ出ずに行う**: `snapshot_download(repo_id=MODEL_REPO_ID,
+   revision=EXPECTED_MODEL_REVISION, local_files_only=True, allow_patterns=MODEL_ALLOW_PATTERNS)`
+   でスナップショットを解決し、返却パスの末尾ディレクトリ名が `EXPECTED_MODEL_REVISION` と
+   一致することを確認する。`MODEL_ALLOW_PATTERNS` は `from_local` が実際に読む5ファイル
+   （`ve.pt` / `t3_mtl23ls_v3.safetensors` / `s3gen.pt` /
+   `grapheme_mtl_merged_expanded_v1.json` / `conds.pt`）に限定する。
 5. **`synthesize`**:
    - `load()` 未実行なら `EngineError(ErrorCode.ERR_INTERNAL)`。
    - `language != "ja"` なら `ValueError`。
-   - `ChatterboxMultilingualTTS.from_pretrained(..., t3_model="v3")` で得たモデルの
-     `generate(text, language_id="ja", audio_prompt_path=str(reference_wav))` を呼ぶ。
-   - 結果テンソルを `torchaudio.save(str(output_path), wav, model.sr)` で
-     **モノラル・model.sr（24,000Hz）** の WAV として書き、`output_path` を返す（FR-207）。
+   - モデルは `from_pretrained`（`revision="main"` 浮動）を**使わない**。項目4で固定リビジョンの
+     ローカルスナップショットを解決し、`ChatterboxMultilingualTTS.from_local(snapshot, device, t3_model="v3")`
+     で得たモデルの `generate(text, language_id="ja", audio_prompt_path=str(reference_wav))` を呼ぶ。
+   - 結果テンソルを
+     `torchaudio.save(str(output_path), wav, model.sr, encoding="PCM_S", bits_per_sample=16)` で
+     **モノラル・model.sr（24,000Hz）・16bit PCM** の WAV として書き、`output_path` を返す（FR-207）。
    - `generate()` の `exaggeration` / `cfg_weight` / `temperature` 等は**既定値のまま**とし、
      設定項目として外へ出さない（仕様外機能の追加禁止）。
 6. **`detect_watermark`**:

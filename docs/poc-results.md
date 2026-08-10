@@ -257,3 +257,66 @@ SHA-256（スナップショット内の実ファイル）:
 2. 完全ネットワーク遮断下での生成一式の動作確認（実モデル契約テストに含める）。
 3. MPS 1文目のウォームアップ遅延（約1.7倍）: プロセス内1回ロード方針（T-203）で吸収されるが、初回リクエストの応答時間見積もりに反映する。
 4. FR-106確定閾値（本書 §5）を T-105 の設定既定値へ反映する。
+
+## T-203: Chatterboxアダプター 実モデル契約テスト実測（2026-08-10 実施）
+
+Phase 2 T-203（`src/koeclone/engines/chatterbox.py`）に対し、Claudeが基準Macで実モデルを
+ロードして実施した結果。Codexは実モデルを一度もロードしていない（契約 §1.2-4 / §5.6）。
+
+### 1. 実行条件
+
+| 項目 | 内容 |
+|---|---|
+| 実行コマンド | `KOECLONE_REAL_MODEL=1 HF_HUB_OFFLINE=1 .venv/bin/python -m pytest tests/engine_contract -q -m real_model` |
+| 結果 | **5 passed / 1 skipped**（19.27s）。skip は「MPS利用可のためMPS不可ケースは対象外」の明示スキップ |
+| モデル解決 | `snapshot_download(revision="5bb1f6ee…", local_files_only=True, allow_patterns=5ファイル)` → `ChatterboxMultilingualTTS.from_local(snapshot, device, t3_model="v3")` |
+| 参照音声 | `tmp/reference_kyoko.wav`（P0-C2と同一の合成参照） |
+
+`from_pretrained`（`revision="main"` 浮動）は使用しない方式へ確定した（P0-C2 §8 引き継ぎ事項1を解消）。
+`allow_patterns` は `from_local` が実際に読む5ファイル（`ve.pt` / `t3_mtl23ls_v3.safetensors` /
+`s3gen.pt` / `grapheme_mtl_merged_expanded_v1.json` / `conds.pt`）に限定し、日本語MVPに不要な
+`Cangjie5_TC.json` を取得対象から外した。
+
+### 2. 時間の実測（プロセス内1回ロード）
+
+| 計測 | 実測 | 備考 |
+|---|---|---|
+| `load()`（MPS） | **10.60 s** / pytest fixture setup 10.84 s | `active_device="mps"`、`fallback_reason=None`（CPUフォールバックなし） |
+| `load()` 2回目 | 即 return（同一モデルオブジェクト） | 冪等性テストで `_model` 同一性を確認 |
+| `synthesize()` | **8.51 s** / pytest fixture setup 8.25 s | 17文字「これは音声クローンの動作確認です。」→ 音声3.04 s、**RTF 2.80**（プロセス内初回のためMPSウォームアップ込み。P0-C2の1文目2.73と整合） |
+| `detect_watermark()` | **0.05 s** | 検出器インスタンスは保持・再利用 |
+
+### 3. 出力形式の実測（`wave` モジュールで検証）
+
+| 項目 | 実測 | 契約（FR-207） |
+|---|---|---|
+| チャンネル数 | 1（モノラル） | モノラル |
+| サンプルレート | 24,000 Hz | `model.sr` = 24,000 Hz |
+| サンプル幅 | **2 バイト（16bit PCM）** | `encoding="PCM_S", bits_per_sample=16` を明示指定 |
+| フレーム数 / サイズ | 72,960 フレーム / 145,964 バイト（3.04 s） | — |
+
+`torchaudio.save` は指定なしだと32bit floatで書き出す可能性があるため、16bit PCMを明示固定した。
+テストは `getsampwidth() == 2` まで検証する。
+
+### 4. ウォーターマーク・リビジョン検証
+
+| 検証 | 結果 |
+|---|---|
+| 生成WAVの PerTh 検出（AC-08 / FR-008） | **True**（`get_watermark` ≥ 0.5） |
+| `EXPECTED_MODEL_REVISION` を `"0"*40` に差し替えたロード | `EngineError(ERR_INTERNAL)` を送出（固定リビジョン以外を拒否） |
+| FR-006 表層検査（無効化引数・属性・ソース文字列） | 該当なし |
+
+### 5. 完全オフライン確認（P0-C2 §8 引き継ぎ事項2 → 解消）
+
+`HF_HUB_OFFLINE=1` に加え、プロセス内で `socket.socket.connect` / `connect_ex` /
+`socket.create_connection` / `socket.getaddrinfo` をフックし、**ループバック以外への接続を全て例外化**
+した状態で `load()` → `synthesize()`（日本語）→ `detect_watermark()` を実行した。
+
+- 結果: 全工程成功（`active_device=mps`、モノラル/24,000Hz/16bit、ウォーターマーク検出 True）。
+- **遮断された接続試行は0件**（DNS解決の試行も0件）。モデル・トークナイザ・PerTh検出器の全てが
+  ローカルキャッシュのみで完結することを実証した（`~/.pkuseg` 取得済み前提）。
+
+### 6. 判定
+
+T-203 の実モデル契約項目（契約 §5.5 の 8〜13）は全て合格。プロセス内1回ロード・`ja` 固定合成・
+固定リビジョン強制・16bit PCM モノラル24kHz出力・PerTh検出・完全オフライン動作を実測で確認した。
