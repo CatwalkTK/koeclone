@@ -158,11 +158,18 @@ tests/engine_contract/**
 |---|---|
 | 400 | `ERR_BAD_REQUEST` |
 | 403 | `ERR_NO_CONSENT`, `ERR_AI_DISCLOSURE_REQUIRED` |
-| 404 | `ERR_PROFILE_NOT_FOUND`, `ERR_JOB_NOT_FOUND`, `ERR_DRAFT_NOT_FOUND` |
+| 404 | `ERR_PROFILE_NOT_FOUND`, `ERR_JOB_NOT_FOUND`, `ERR_DRAFT_NOT_FOUND`, `ERR_ROUTE_NOT_FOUND` |
+| 405 | `ERR_ROUTE_NOT_FOUND` |
 | 409 | `ERR_PROFILE_ALREADY_EXISTS`, `ERR_AUDIO_NOT_READY` |
 | 413 | `ERR_REQUEST_TOO_LARGE` |
 | 422 | `ERR_TEXT_EMPTY`, `ERR_TEXT_TOO_LONG`, `ERR_TEXT_WHITESPACE_ONLY`, `ERR_SYNTHESIS_TEXT_TOO_LONG`, `ERR_READING_EMPTY`, `ERR_READING_INVALID_CHARS`, `ERR_OVERRIDE_RANGE_INVALID`, `ERR_OVERRIDE_SURFACE_MISMATCH`, `ERR_OVERRIDE_OVERLAP`, `ERR_OVERRIDE_NO_KANJI`, `ERR_AUDIO_TOO_SHORT`, `ERR_AUDIO_TOO_LONG`, `ERR_AUDIO_MOSTLY_SILENT`, `ERR_AUDIO_CLIPPING`, `ERR_AUDIO_LEVEL_OUT_OF_RANGE`, `ERR_FILE_TOO_LARGE`, `ERR_FILE_FORMAT_MISMATCH`, `ERR_FILE_CORRUPTED`, `ERR_FILE_NO_AUDIO`, `ERR_FILE_UNSUPPORTED_FORMAT` |
 | 500 | `ERR_INTERNAL`, `ERR_WATERMARK_NOT_DETECTED`（API直接返却はせず、ジョブの `error_code` として保持） |
+
+**`ERR_ROUTE_NOT_FOUND` の用途（限定）**: 存在しないパス、および既知パスへの許可されないメソッド**専用**。
+リソース不在（プロフィール・ジョブ・ドラフト）には使わず、必ず個別コードを返す。
+Starlette/FastAPI 既定の `{"detail": ...}` 応答を**そのまま返さない**。
+未処理の `StarletteHTTPException` は例外ハンドラで §1.1 の形状へ変換する
+（404・405 は `ERR_ROUTE_NOT_FOUND`、それ以外の未マップ状態コードは `500 ERR_INTERNAL` として扱う）。
 
 ### 1.3 命名・型の規約
 
@@ -203,9 +210,51 @@ tests/engine_contract/**
 
 ```python
 # src/koeclone/api/app.py
-def create_app(config: AppConfig, *, engine: SpeechEngine, docs_enabled: bool = False) -> FastAPI: ...
+def create_app(
+    config: AppConfig,
+    *,
+    engine: SpeechEngine,
+    docs_enabled: bool = False,
+    web_dir: Path | None = None,   # 既定は src/koeclone/web。テストは tmp_path を渡す
+) -> FastAPI: ...
 def create_default_app() -> FastAPI: ...  # 環境変数から構築。uvicorn --factory 用
 ```
+
+#### ルータ登録機構（T-301 が実装。T-302 以降は `app.py` を変更しない）
+
+`create_app` は以下の**固定リスト**を順に走査し、モジュールが存在すれば登録する。
+
+```python
+_ROUTER_MODULES = ("consent", "voices", "syntheses")   # この3件で固定。増減しない
+
+for name in _ROUTER_MODULES:
+    if importlib.util.find_spec(f"koeclone.api.{name}") is None:
+        continue                                   # 未実装タスクの分は飛ばす
+    module = importlib.import_module(f"koeclone.api.{name}")
+    app.include_router(module.router, prefix="/api")
+```
+
+- `find_spec` が `None` を返すのは**ファイルが存在しないときだけ**。
+  モジュール内部の import エラー・構文エラーは**握り潰さず伝播させる**
+  （`try/except ImportError` で囲まない。ルータが黙って無効化される事故を防ぐ）。
+- **各ルータモジュールはモジュール直下に `router: APIRouter` を公開する**。
+  パスは `/api` を**含めずに**定義する（例: `@router.get("/consent/challenge")` → 実パス `/api/consent/challenge`）。
+- **登録順序**: `/api/health` → 上記ルータ群 → **最後に** `StaticFiles` を `/` へマウント。
+  Starlette は定義順にマッチし `Mount("/")` は全パスに一致するため、
+  **静的マウントより後に追加したルートは到達不能**になる。テストで一時ルートを足す場合も
+  `app.router.routes.insert(0, ...)` で先頭に挿入する。
+
+#### `app.state.queue` の初期化（T-301 が実装）
+
+`JobQueue` のハンドラは `job_id` のみを受け取るため、T-301 は
+「DB からジョブ行を読み、`SynthesisRequest` を組み立てて `pipeline.run()` を呼ぶ」
+薄いハンドラを `app.py` に実装する。
+
+- `pronunciation_overrides`（JSON文字列）を `tuple[PronunciationOverride, ...]` に復元する。
+- 対象ジョブが存在しない場合は `KoecloneError(ERR_JOB_NOT_FOUND)` を送出する
+  （`JobQueue` 側が `failed` へ遷移させる）。
+- `create_app` の中で `queue.start()` を呼ぶ。**lifespan イベントに依存しない**
+  （`TestClient` を `with` なしで使うテストでもジョブが処理されるようにするため）。
 
 `app.state` に以下を保持し、各ルータはここから取得する（グローバル変数を使わない）:
 
@@ -238,10 +287,11 @@ src/koeclone/errors.py          （列挙子の追加のみ）
 src/koeclone/config.py          （フィールドの追加のみ）
 ```
 
-**`errors.py` へ追加する列挙子（この7件のみ。既存は一切変更しない）**:
+**`errors.py` へ追加する列挙子（この8件のみ。既存は一切変更しない）**:
 
 ```python
 ERR_BAD_REQUEST = "ERR_BAD_REQUEST"
+ERR_ROUTE_NOT_FOUND = "ERR_ROUTE_NOT_FOUND"
 ERR_REQUEST_TOO_LARGE = "ERR_REQUEST_TOO_LARGE"
 ERR_DRAFT_NOT_FOUND = "ERR_DRAFT_NOT_FOUND"
 ERR_PROFILE_NOT_FOUND = "ERR_PROFILE_NOT_FOUND"
@@ -275,17 +325,20 @@ app_version: str = "0.1.0"
 | 1 | `test_health_returns_ok_without_loading_model` | `200` / 上記JSON形状 / `FakeEngine.load_count == 0` |
 | 2 | `test_no_cors_headers_are_exposed` | `Origin: http://evil.example` 付きGETで `access-control-allow-origin` ヘッダが**存在しない**（S-2） |
 | 3 | `test_request_body_over_50mb_is_rejected` | 50MB+1バイトのPOSTが `413` / `ERR_REQUEST_TOO_LARGE`（S-3） |
-| 4 | `test_error_response_shape_is_stable` | 未知パス `GET /api/unknown` が `404` かつ `{"error":{"code","message","error_id"}}` 形状 |
+| 4 | `test_error_response_shape_is_stable` | 未知パス `GET /api/unknown` が `404` / `error.code == "ERR_ROUTE_NOT_FOUND"` / `{"error":{"code","message","error_id"}}` 形状（`error_id` は `null`）。`detail` キーを含まない |
 | 5 | `test_internal_error_hides_details_and_returns_error_id` | 意図的に `KoecloneError(ERR_INTERNAL)` を投げるテスト用ルートで `500` / `error_id` がUUID / メッセージに例外文言・パスを含まない（S-9） |
 | 6 | `test_openapi_is_disabled_by_default` | `GET /openapi.json` と `GET /docs` が `404`。`docs_enabled=True` では `200`（S-8） |
-| 7 | `test_static_web_directory_is_served` | `GET /` が `200` かつ `text/html`（`web/index.html` が無い段階は暫定ファイルをtmpに用意して検証してよい） |
-| 8 | `test_invalid_uuid_path_becomes_bad_request` | `GET /api/syntheses/not-a-uuid` が `400 ERR_BAD_REQUEST`（§1.3） |
+| 7 | `test_static_web_directory_is_served` | `create_app(..., web_dir=tmp_path)` に `index.html` を置き、`GET /` が `200` かつ `text/html`。**リポジトリ内の `src/koeclone/web/` にファイルを作らない**（T-307 の所有領域） |
+| 8 | `test_invalid_uuid_path_becomes_bad_request` | **テスト専用ルート** `GET /api/_test/uuid/{value}`（`value: uuid.UUID`）をテスト内で `app.router.routes.insert(0, ...)` により登録し、`not-a-uuid` が `400 ERR_BAD_REQUEST`（§1.3）。**`/api/syntheses/*` の仮ルートを作らない**（T-305 の所有領域） |
 | 9 | `test_run_script_binds_loopback_only` | `scripts/run.sh` が `127.0.0.1` を含み、`0.0.0.0` と `--host` の外部指定を含まない（S-1） |
 | 10 | `test_app_config_host_cannot_be_overridden_by_env` | `KOECLONE_HOST=0.0.0.0` を設定しても `AppConfig.from_env().host == "127.0.0.1"`（S-1） |
 
-**GREEN**: 最小のアプリファクトリ、`KoecloneError` → JSON のグローバル例外ハンドラ、
-`RequestValidationError` → `400 ERR_BAD_REQUEST` ハンドラ、サイズ制限ミドルウェア、
-`StaticFiles(directory=web, html=True)` を `/` へ**最後にマウント**（`/api/*` を先に登録）。
+**GREEN**: 最小のアプリファクトリ（§1.6 のルータ登録機構・`queue.start()` を含む）、
+`KoecloneError` → JSON のグローバル例外ハンドラ、
+`RequestValidationError` → `400 ERR_BAD_REQUEST` ハンドラ、
+`StarletteHTTPException` → §1.1 形状ハンドラ（404/405 は `ERR_ROUTE_NOT_FOUND`）、
+サイズ制限ミドルウェア、
+`StaticFiles(directory=web_dir, html=True)` を `/` へ**最後にマウント**（`/api/*` を先に登録）。
 
 **REFACTOR**: 例外ハンドラとメッセージ表の整理まで。
 
@@ -562,6 +615,7 @@ exec .venv/bin/python -m uvicorn koeclone.api.app:create_default_app \
 | 13 | `test_audio_is_forbidden_when_watermark_missing` | `FakeEngine(detect_result=False)` → ジョブ `failed`・`error_code=ERR_WATERMARK_NOT_DETECTED`・音声 `409`・WAV未残置（AC-08） |
 | 14 | `test_unknown_job_returns_404` | `404 ERR_JOB_NOT_FOUND` |
 | 15 | `test_status_exposes_text_preview_80_chars` | 100文字入力で `text_preview` が80文字 |
+| 16 | `test_invalid_uuid_in_synthesis_path_returns_400` | `GET /api/syntheses/not-a-uuid` が `400 ERR_BAD_REQUEST`（§1.3。T-301 のRED#8を実ルート上で確認する。**ハンドラは T-301 実装済みのものを使い、`syntheses.py` に個別実装しない**） |
 
 **GREEN**: 薄いルータ＋キュー投入。**REFACTOR**: レスポンス整形の共通化まで。
 **検証**: `pytest tests/integration/test_syntheses_api.py -q`
@@ -839,7 +893,29 @@ KOECLONE_DOCS=1 ./scripts/run.sh
 | # | 差分 | 理由 |
 |---|---|---|
 | 1 | `GET /api/voices/draft/{draft_id}/audio` を追加（仕様§9の12エンドポイントに含まれない） | FR-108「登録確定前に正規化後の参照音声を試聴できる」を実現するために必要な `/api/voices` のサブリソース。**新機能ではなく既存要件の実装手段**。ドラフトはプロセス内保持で永続化しない |
-| 2 | `ErrorCode` に7件追加（§2.1） | 仕様§7.4「全APIエラーは安定したエラーコードを持つ」を満たすために必要。既存コードは変更しない |
+| 2 | `ErrorCode` に8件追加（§2.1） | 仕様§7.4「全APIエラーは安定したエラーコードを持つ」を満たすために必要。既存コードは変更しない |
 | 3 | `AppConfig` に `engine` / `app_version` を追加 | 偽エンジン切替（テスト・E2E必須）と同意記録の `app_version`（FR-009）に必要 |
 
 上記3件以外の追加・変更は**契約違反**として差戻す。
+
+---
+
+## 6. 契約改訂履歴
+
+### 2026-08-10 改訂1（T-301 着手前 / Codex報告の§0.6停止に対するClaude裁定）
+
+Codex から3件の矛盾報告を受け、Claude が本契約を以下のとおり修正した。**コード変更前**の修正であり、
+既存の実装・テストへの影響はない。
+
+| # | 報告された矛盾 | 裁定 | 変更箇所 |
+|---|---|---|---|
+| 1 | RED#4 の未知ルート404に割り当てられるコードが§1.2表に存在しない（`ERR_BAD_REQUEST` は400限定） | **`ERR_ROUTE_NOT_FOUND` を追加**（列挙子7件→8件）。`ERR_BAD_REQUEST` を404で返す例外扱いは、コード→ステータス対応の安定性（§7.4）を崩すため**採用しない** | §1.2 表・注記、§2.1 列挙子、RED#4、§5-2 |
+| 2 | RED#8 が T-305 所有の `/api/syntheses/*` を要求する | 検証対象は**§1.3のUUID変換ハンドラ**であってルートではない。RED#5 と同じ「テスト専用ルート」方式に変更し、実ルート上の確認は T-305 の RED#16 として移設 | RED#8、T-305 RED#16 |
+| 3 | 後続ルータを製品appへ登録する機構が未定義（T-302以降は `app.py` 変更禁止） | **T-301 が `find_spec` による固定リスト走査で遅延登録する**。各タスクへ `app.py` 追記所有を許可する案は、第2段の3系列並行（T-302 / T-303 / T-305）が同一ファイルを奪い合うため**採用しない** | §1.6 ルータ登録機構 |
+
+あわせて、着手直後に停止を招く以下2点を先回りで確定した（Codexからの報告事項ではない）。
+
+| # | 論点 | 裁定 | 変更箇所 |
+|---|---|---|---|
+| 4 | RED#7 の静的配信テストが `src/koeclone/web/index.html`（T-307所有）を必要としてしまう | `create_app` に `web_dir` 引数を追加し、テストは `tmp_path` を渡す | §1.6 シグネチャ、RED#7 |
+| 5 | `JobQueue` のハンドラと起動タイミングが未定義（未起動だとジョブが永久に処理されない） | T-301 が DB→`SynthesisRequest` の薄いハンドラを実装し、`create_app` 内で `queue.start()` を呼ぶ | §1.6 `app.state.queue` の初期化 |
