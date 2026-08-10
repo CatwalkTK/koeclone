@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS synthesis_jobs (
     completed_at TEXT
 )
 """
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -167,36 +168,43 @@ class Database:
         self,
         job_id: str,
         *,
-        status: str,
-        audio_path: str | None = None,
-        sidecar_path: str | None = None,
-        duration_ms: int | None = None,
-        watermark_detected: bool | None = None,
-        error_code: str | None = None,
-        completed_at: str | None = None,
+        status: str | object = _UNSET,
+        audio_path: str | None | object = _UNSET,
+        sidecar_path: str | None | object = _UNSET,
+        duration_ms: int | None | object = _UNSET,
+        watermark_detected: bool | None | object = _UNSET,
+        error_code: str | None | object = _UNSET,
+        completed_at: str | None | object = _UNSET,
     ) -> None:
-        watermark_value = (
-            None if watermark_detected is None else int(watermark_detected)
+        updates = (
+            ("status", status),
+            ("audio_path", audio_path),
+            ("sidecar_path", sidecar_path),
+            ("duration_ms", duration_ms),
+            ("watermark_detected", watermark_detected),
+            ("error_code", error_code),
+            ("completed_at", completed_at),
         )
+        assignments: list[str] = []
+        values: list[object] = []
+        for column, value in updates:
+            if value is _UNSET:
+                continue
+            if column == "watermark_detected" and value is not None:
+                value = int(bool(value))
+            assignments.append(f"{column} = ?")
+            values.append(value)
+        if not assignments:
+            raise ValueError("At least one job field must be updated")
+
+        values.append(job_id)
         with self._connect() as connection:
-            connection.execute(
-                """
-                UPDATE synthesis_jobs
-                SET status = ?, audio_path = ?, sidecar_path = ?, duration_ms = ?,
-                    watermark_detected = ?, error_code = ?, completed_at = ?
-                WHERE id = ?
-                """,
-                (
-                    status,
-                    audio_path,
-                    sidecar_path,
-                    duration_ms,
-                    watermark_value,
-                    error_code,
-                    completed_at,
-                    job_id,
-                ),
+            cursor = connection.execute(
+                f"UPDATE synthesis_jobs SET {', '.join(assignments)} WHERE id = ?",
+                values,
             )
+            if cursor.rowcount == 0:
+                raise StorageError(ErrorCode.ERR_INTERNAL)
 
     def list_synthesis_jobs(self) -> list[SynthesisJob]:
         with self._connect() as connection:

@@ -150,6 +150,66 @@ def test_creates_gets_and_updates_job(tmp_path: Path) -> None:
     )
 
 
+def test_partial_job_update_preserves_unspecified_results(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite3")
+    database.create_voice_profile(voice_profile())
+    job = synthesis_job()
+    database.create_synthesis_job(job)
+    database.update_synthesis_job(
+        job.id,
+        status="succeeded",
+        audio_path="generated/job-1.wav",
+        sidecar_path="generated/job-1.json",
+        duration_ms=2_500,
+        watermark_detected=True,
+        completed_at="2026-08-10T01:02:00+00:00",
+    )
+
+    database.update_synthesis_job(job.id, status="running")
+
+    updated = database.get_synthesis_job(job.id)
+    assert updated is not None
+    assert updated.status == "running"
+    assert updated.audio_path == "generated/job-1.wav"
+    assert updated.sidecar_path == "generated/job-1.json"
+    assert updated.duration_ms == 2_500
+    assert updated.watermark_detected is True
+    assert updated.completed_at == "2026-08-10T01:02:00+00:00"
+
+
+def test_explicit_none_clears_only_requested_job_result(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite3")
+    database.create_voice_profile(voice_profile())
+    job = replace(
+        synthesis_job(),
+        status="succeeded",
+        audio_path="generated/job-1.wav",
+        sidecar_path="generated/job-1.json",
+        duration_ms=2_500,
+        watermark_detected=True,
+        completed_at="2026-08-10T01:02:00+00:00",
+    )
+    database.create_synthesis_job(job)
+
+    database.update_synthesis_job(job.id, audio_path=None)
+
+    updated = database.get_synthesis_job(job.id)
+    assert updated is not None
+    assert updated.audio_path is None
+    assert updated.sidecar_path == job.sidecar_path
+    assert updated.duration_ms == job.duration_ms
+    assert updated.watermark_detected is True
+
+
+def test_rejects_update_for_unknown_job(tmp_path: Path) -> None:
+    database = Database(tmp_path / "db.sqlite3")
+
+    with pytest.raises(StorageError) as error:
+        database.update_synthesis_job("missing", status="failed")
+
+    assert error.value.code is ErrorCode.ERR_INTERNAL
+
+
 def test_lists_jobs_newest_first(tmp_path: Path) -> None:
     database = Database(tmp_path / "db.sqlite3")
     database.create_voice_profile(voice_profile())
