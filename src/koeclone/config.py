@@ -12,6 +12,8 @@ class AppConfig:
     data_dir: Path = field(default_factory=lambda: Path.home() / "koeclone-data")
     device: str = "mps"
     allow_cpu_fallback: bool = False
+    engine: str = "chatterbox"
+    app_version: str = "0.1.0"
 
     silence_window_ms: int = 20
     silence_rms_dbfs: float = -50.0
@@ -36,8 +38,12 @@ class AppConfig:
         allow_cpu_fallback = os.environ.get(
             "KOECLONE_ALLOW_CPU_FALLBACK", "false"
         ).casefold() in {"1", "true", "yes", "on"}
+        engine = os.environ.get("KOECLONE_ENGINE", "chatterbox")
+        if engine not in {"chatterbox", "fake"}:
+            raise ValueError("KOECLONE_ENGINE must be chatterbox or fake")
         return cls(
             port=port,
             data_dir=data_dir,
             allow_cpu_fallback=allow_cpu_fallback,
+            engine=engine,
         )

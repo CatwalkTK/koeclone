@@ -169,7 +169,13 @@ tests/engine_contract/**
 リソース不在（プロフィール・ジョブ・ドラフト）には使わず、必ず個別コードを返す。
 Starlette/FastAPI 既定の `{"detail": ...}` 応答を**そのまま返さない**。
 未処理の `StarletteHTTPException` は例外ハンドラで §1.1 の形状へ変換する
-（404・405 は `ERR_ROUTE_NOT_FOUND`、それ以外の未マップ状態コードは `500 ERR_INTERNAL` として扱う）。
+（404・405 は `ERR_ROUTE_NOT_FOUND`。**405 は元の状態コード 405 を維持し、404 へ丸めない**。
+それ以外の未マップ状態コードは `500 ERR_INTERNAL` として扱う）。
+
+**catch-all**: 上記いずれのハンドラにも該当しない**未捕捉例外（`Exception`）も §1.1 の形状に統一する**。
+`500 ERR_INTERNAL` ＋ UUID4 の `error_id` を返し、Starlette 既定のプレーンテキスト
+`Internal Server Error` や例外文言・スタックトレースを応答本文に一切含めない（S-9）。
+`error_id` と `ErrorCode` のみをサーバーログに1行記録する（S-7）。
 
 ### 1.3 命名・型の規約
 
@@ -332,12 +338,17 @@ app_version: str = "0.1.0"
 | 8 | `test_invalid_uuid_path_becomes_bad_request` | **テスト専用ルート** `GET /api/_test/uuid/{value}`（`value: uuid.UUID`）をテスト内で `app.router.routes.insert(0, ...)` により登録し、`not-a-uuid` が `400 ERR_BAD_REQUEST`（§1.3）。**`/api/syntheses/*` の仮ルートを作らない**（T-305 の所有領域） |
 | 9 | `test_run_script_binds_loopback_only` | `scripts/run.sh` が `127.0.0.1` を含み、`0.0.0.0` と `--host` の外部指定を含まない（S-1） |
 | 10 | `test_app_config_host_cannot_be_overridden_by_env` | `KOECLONE_HOST=0.0.0.0` を設定しても `AppConfig.from_env().host == "127.0.0.1"`（S-1） |
+| 11 | `test_request_body_limit_stops_spoofed_stream` | **`Content-Length` 詐称**（小さい値を宣言し実body を上限超まで送る）で `413 ERR_REQUEST_TOO_LARGE`。生ASGI呼び出しでボディをストリーム送出し、**実受信バイト数が上限＋1チャンク以内で打ち切られる**ことを確認する（S-3） |
+| 12 | `test_method_not_allowed_keeps_405_status` | 既知パスへの許可されないメソッド（例 `POST /api/health`）が **`405`**（404 に丸めない）／`error.code == "ERR_ROUTE_NOT_FOUND"`（§1.2） |
+| 13 | `test_unexpected_error_uses_stable_internal_shape` | `KoecloneError` 以外の未捕捉例外（内部パス文字列を含む `RuntimeError`）を投げるテスト用ルートで `500` / `ERR_INTERNAL` / `error_id` がUUID / **応答本文に例外文言・内部パスが現れない**（§1.2 catch-all・S-9） |
 
 **GREEN**: 最小のアプリファクトリ（§1.6 のルータ登録機構・`queue.start()` を含む）、
 `KoecloneError` → JSON のグローバル例外ハンドラ、
 `RequestValidationError` → `400 ERR_BAD_REQUEST` ハンドラ、
-`StarletteHTTPException` → §1.1 形状ハンドラ（404/405 は `ERR_ROUTE_NOT_FOUND`）、
-サイズ制限ミドルウェア、
+`StarletteHTTPException` → §1.1 形状ハンドラ（404/405 は `ERR_ROUTE_NOT_FOUND`。405 は元status維持）、
+`Exception` → `500 ERR_INTERNAL` の catch-all ハンドラ（§1.2）、
+サイズ制限ミドルウェア（`Content-Length` と**実受信バイト数の両方**で計測し、超過時はボディ読取を打ち切る。
+FastAPI の `BaseHTTPMiddleware` ではボディ全体を先に読んでしまうため、**純ASGIミドルウェアとして実装する**）、
 `StaticFiles(directory=web_dir, html=True)` を `/` へ**最後にマウント**（`/api/*` を先に登録）。
 
 **REFACTOR**: 例外ハンドラとメッセージ表の整理まで。
@@ -919,3 +930,14 @@ Codex から3件の矛盾報告を受け、Claude が本契約を以下のとお
 |---|---|---|---|
 | 4 | RED#7 の静的配信テストが `src/koeclone/web/index.html`（T-307所有）を必要としてしまう | `create_app` に `web_dir` 引数を追加し、テストは `tmp_path` を渡す | §1.6 シグネチャ、RED#7 |
 | 5 | `JobQueue` のハンドラと起動タイミングが未定義（未起動だとジョブが永久に処理されない） | T-301 が DB→`SynthesisRequest` の薄いハンドラを実装し、`create_app` 内で `queue.start()` を呼ぶ | §1.6 `app.state.queue` の初期化 |
+
+### 2026-08-10 改訂2（T-301 レビュー中 / Claudeが発見した契約の穴を明文化）
+
+T-301 の実装レビューで、**契約に書かれていないために抜け落ちうる**穴を3件発見した。
+いずれも実装済みの内容を契約へ追認するものであり、実装への新規要求は追加していない。
+
+| # | 契約の穴 | 追記内容 | 変更箇所 |
+|---|---|---|---|
+| 1 | 未捕捉例外（`KoecloneError` / `StarletteHTTPException` 以外）の応答形が未定義。Starlette 既定のプレーンテキスト `Internal Server Error` が漏れても契約違反にならなかった | `Exception` の catch-all を必須化。`500 ERR_INTERNAL` ＋ `error_id`、本文に例外文言・内部パスを含めない | §1.2 catch-all、§2.1 GREEN、RED#13 |
+| 2 | S-3 が「`Content-Length` 詐称に備え受信バイト数でも計測」を要求しているのに、対応する RED が存在せず、宣言値チェックのみでも RED#3 を通過できた | 生ASGI でボディをストリーム送出する詐称テストを RED に追加。純ASGIミドルウェア実装を明記 | §2.1 RED#11、GREEN |
+| 3 | §1.2 表は 405 に `ERR_ROUTE_NOT_FOUND` を割り当てるが RED が無く、405 を 404 へ丸めても検出できなかった | 405 の状態コード維持を明記し RED を追加 | §1.2 注記、§2.1 RED#12 |
