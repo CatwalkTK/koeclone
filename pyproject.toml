@@ -25,3 +25,6 @@ chatterbox-tts = { git = "https://github.com/resemble-ai/chatterbox.git", rev = 
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = [
+    "real_model: 実モデル（Chatterbox Multilingual V3）をロードする契約テスト。基準Macでのみ実行する",
+]
