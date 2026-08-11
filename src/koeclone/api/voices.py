@@ -12,7 +12,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from koeclone.domain.audio_quality import AudioSourceMode, validate_audio_quality
 from koeclone.domain.consent import ConsentMethod, build_consent_record
@@ -29,7 +29,11 @@ from koeclone.media.ffmpeg import (
     wav_duration_ms,
 )
 from koeclone.storage.db import StorageError, SynthesisJob, VoiceProfile
-from koeclone.storage.files import storage_path
+from koeclone.storage.files import (
+    collect_deletion_targets,
+    delete_targets,
+    storage_path,
+)
 
 router = APIRouter()
 
@@ -91,6 +95,34 @@ async def create_voice(
         audio,
         consent_audio,
     )
+
+
+@router.get("/voices/current")
+def get_current_voice(request: Request) -> dict[str, object]:
+    profile = request.app.state.database.get_current_voice_profile()
+    if profile is None:
+        raise KoecloneError(ErrorCode.ERR_PROFILE_NOT_FOUND)
+    return _voice_response(profile)
+
+
+@router.delete("/voices/current", status_code=204)
+def delete_current_voice(request: Request) -> Response:
+    database = request.app.state.database
+    profile = database.get_current_voice_profile()
+    if profile is None:
+        raise KoecloneError(ErrorCode.ERR_PROFILE_NOT_FOUND)
+
+    targets = collect_deletion_targets(
+        request.app.state.paths,
+        reference_id=profile.id,
+        consent_id=profile.id,
+        job_ids=[job.id for job in database.list_synthesis_jobs()],
+    )
+    delete_targets(request.app.state.paths.root, targets)
+    database.delete_all_synthesis_jobs()
+    database.delete_voice_profile(profile.id)
+    request.app.state.drafts.clear()
+    return Response(status_code=204)
 
 
 @router.get("/voices/draft/{draft_id}/audio")
@@ -337,14 +369,12 @@ def _validate_recording(path: Path, config) -> None:
         result = probe_audio(path)
     except (OSError, ValueError) as error:
         raise KoecloneError(ErrorCode.ERR_FILE_CORRUPTED) from error
-    if (
-        result.encrypted
-        or result.duration_seconds is None
-        or result.duration_seconds <= 0
-    ):
+    if result.encrypted:
         raise KoecloneError(ErrorCode.ERR_FILE_CORRUPTED)
     if not result.has_audio:
         raise KoecloneError(ErrorCode.ERR_FILE_NO_AUDIO)
+    if result.duration_seconds is None or result.duration_seconds <= 0:
+        raise KoecloneError(ErrorCode.ERR_FILE_CORRUPTED)
     minimum, maximum = config.direct_recording_seconds
     if result.duration_seconds < minimum:
         raise KoecloneError(ErrorCode.ERR_AUDIO_TOO_SHORT)
