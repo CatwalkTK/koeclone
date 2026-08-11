@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from koeclone.domain.pronunciation import (
@@ -18,7 +18,12 @@ from koeclone.domain.synthesis_text import build_synthesis_text
 from koeclone.domain.text_validation import validate_text
 from koeclone.errors import ErrorCode, KoecloneError
 from koeclone.storage.db import SynthesisJob
-from koeclone.storage.files import download_filename
+from koeclone.storage.files import (
+    DeletionTargets,
+    delete_targets,
+    download_filename,
+    storage_path,
+)
 
 router = APIRouter()
 
@@ -102,10 +107,43 @@ def create_synthesis(request: Request, body: CreateBody) -> JSONResponse:
     )
 
 
+@router.get("/syntheses")
+def list_syntheses(request: Request) -> dict[str, object]:
+    return {
+        "items": [
+            _history_response(job)
+            for job in request.app.state.database.list_synthesis_jobs()
+        ]
+    }
+
+
+@router.delete("/syntheses", status_code=204)
+def delete_all_syntheses(request: Request) -> Response:
+    database = request.app.state.database
+    job_ids = [job.id for job in database.list_synthesis_jobs()]
+    delete_targets(
+        request.app.state.paths.root,
+        _job_deletion_targets(request, job_ids),
+    )
+    database.delete_all_synthesis_jobs()
+    return Response(status_code=204)
+
+
 @router.get("/syntheses/{job_id}")
 def get_synthesis(request: Request, job_id: UUID) -> dict[str, object]:
     job = _get_job(request, job_id)
     return _job_response(job)
+
+
+@router.delete("/syntheses/{job_id}", status_code=204)
+def delete_synthesis(request: Request, job_id: UUID) -> Response:
+    job = _get_job(request, job_id)
+    delete_targets(
+        request.app.state.paths.root,
+        _job_deletion_targets(request, [job.id]),
+    )
+    request.app.state.database.delete_synthesis_job(job.id)
+    return Response(status_code=204)
 
 
 @router.get("/syntheses/{job_id}/audio")
@@ -204,6 +242,32 @@ def _job_response(job: SynthesisJob) -> dict[str, object]:
             job.status == "succeeded" and job.watermark_detected is True
         ),
     }
+
+
+def _history_response(job: SynthesisJob) -> dict[str, object]:
+    return {
+        "id": job.id,
+        "created_at": job.created_at,
+        "text_preview": job.text[:80],
+        "override_count": len(json.loads(job.pronunciation_overrides)),
+        "duration_ms": job.duration_ms,
+        "status": job.status,
+        "audio_available": (
+            job.status == "succeeded" and job.watermark_detected is True
+        ),
+    }
+
+
+def _job_deletion_targets(request: Request, job_ids: list[str]) -> DeletionTargets:
+    paths = request.app.state.paths
+    return DeletionTargets(
+        generated_audio=tuple(
+            storage_path(paths.generated, job_id, ".wav") for job_id in job_ids
+        ),
+        sidecars=tuple(
+            storage_path(paths.generated, job_id, ".json") for job_id in job_ids
+        ),
+    )
 
 
 def _sha256(text: str) -> str:
