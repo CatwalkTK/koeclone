@@ -274,6 +274,9 @@ for name in _ROUTER_MODULES:
 | `queue` | `JobQueue` |
 | `drafts` | `dict[str, VoiceDraft]`（プロセス内のみ。永続化しない） |
 
+`VoiceDraft` は **T-303 が `src/koeclone/api/voices.py` に定義する**（§2.3.1）。
+`app.py` は空辞書 `{}` を置くだけで `VoiceDraft` を import しない（T-301 実装済み。**T-303 は `app.py` を変更しない**）。
+
 ---
 
 ## 2. タスク定義
@@ -414,16 +417,22 @@ exec .venv/bin/python -m uvicorn koeclone.api.app:create_default_app \
 | `consent_audio` | file | `direct_recording` のみ✅ | 同意文のライブ録音（FR-003/009） |
 
 処理順（この順序を守る。**先に落ちた検証のコードを返す**）:
-1. サイズ 50MB 超 → `413 ERR_REQUEST_TOO_LARGE`
-2. 形式照合（`domain/file_probe.validate_audio_file`。probeは `media/ffmpeg.make_probe()`）
-   - `file_upload`: **WAV / MP3 のみ**許可。それ以外は `ERR_FILE_UNSUPPORTED_FORMAT`
-   - `direct_recording`: ブラウザ録音コンテナ（webm / ogg / mp4 / wav）を許可。デコード不能は `ERR_FILE_CORRUPTED`
+1. サイズ 50MB 超 → `413 ERR_REQUEST_TOO_LARGE`（T-301 のミドルウェアが処理済み。ルータでは実装しない）
+2. 形式照合（**モードで使う部品が異なる。§2.3.1-C を正とする**）
+   - `file_upload`: `domain/file_probe.validate_audio_file`（probe は `media/ffmpeg.make_probe()`）。
+     **WAV / MP3 のみ**許可。それ以外は `ERR_FILE_UNSUPPORTED_FORMAT`
+   - `direct_recording`: `validate_audio_file` は **使わない**（WAV/MP3専用のため）。
+     MIME許可表 → `media/ffmpeg.probe_audio` の順で判定する。デコード不能は `ERR_FILE_CORRUPTED`
 3. 長さ検証（`direct_recording` 10〜60秒 / `file_upload` 10〜180秒）→ `ERR_AUDIO_TOO_SHORT` / `ERR_AUDIO_TOO_LONG`
+   （`file_upload` は 2 の `validate_audio_file` が同時に判定する。`direct_recording` は §2.3.1-C で個別に判定する）
 4. 正規化（`media/ffmpeg.normalize_to_reference_wav`、モノラル24kHz）。
    `file_upload` はさらに `detect_silence_ranges` → `select_reference_window` → `extract_reference_segment` で
    10〜30秒の参照区間を抽出（FR-107）
-5. 品質検査（`domain/audio_quality.validate_audio_quality`、正規化後サンプルに対して実施）
+5. 品質検査（`domain/audio_quality.validate_audio_quality`、正規化後サンプルに対して実施。
+   サンプル読み出し規約は §2.3.1-E）
    → `ERR_AUDIO_MOSTLY_SILENT` / `ERR_AUDIO_CLIPPING` / `ERR_AUDIO_LEVEL_OUT_OF_RANGE`
+
+**完全な処理順（`consent_audio` と不正値の扱いを含む）は §2.3.1-B を正とする。**
 
 成功時 `200`:
 ```json
@@ -486,17 +495,330 @@ exec .venv/bin/python -m uvicorn koeclone.api.app:create_default_app \
 | 8 | `test_validate_rejects_clipping_audio` | 振幅1.0飽和WAV → `422 ERR_AUDIO_CLIPPING` |
 | 9 | `test_validate_returns_playable_draft` | `200` / `draft_id` / `preview_url` を `GET` して `audio/wav` かつモノラル24kHz |
 | 10 | `test_confirm_creates_single_profile_and_test_job` | `201` / DBにプロフィール1件 / `test_synthesis_id` のジョブが存在 |
-| 11 | `test_confirm_removes_temporary_files` | 確定後 `paths.temporary` が空（FR-112） |
+| 11 | `test_confirm_removes_temporary_files` | 確定後 `paths.temporary` が空（FR-112）。**テスト文ジョブが `paths.temporary` に作業ディレクトリを作るため、`app.state.queue.wait_for(test_synthesis_id)` で終了を待ってから検査する**（待たないと競合で不安定になる） |
 | 12 | `test_second_profile_is_rejected` | 2件目 `confirm` → `409 ERR_PROFILE_ALREADY_EXISTS`（FR-110） |
 | 13 | `test_confirm_with_unknown_draft_returns_404` | `404 ERR_DRAFT_NOT_FOUND` |
 | 14 | `test_response_does_not_leak_paths_or_hashes` | 応答本文に `reference_path` / `sha256` / `data_dir` の文字列が現れない（S-9） |
 | 15 | `test_display_name_is_not_used_in_file_path` | `display_name="../../etc/passwd"` で確定しても保存先が `data_dir` 配下のUUID名（S-5） |
 | 16 | `test_direct_recording_requires_consent_audio` | `consent_audio` 欠落 → `403 ERR_NO_CONSENT` |
+| 17 | `test_unknown_stage_is_bad_request` | `stage="publish"` → `400 ERR_BAD_REQUEST`（§2.3.1-F） |
+| 18 | `test_display_name_over_50_chars_is_rejected` | 51コードポイントの `display_name` で `confirm` → `400 ERR_BAD_REQUEST`（§2.3.1-F） |
+| 19 | `test_upload_mode_rejects_consent_audio` | `file_upload` に `consent_audio` を付与 → `400 ERR_BAD_REQUEST`（§2.3.1-F） |
 
 **GREEN**: 既存ドメイン部品を順に呼ぶ薄いルータ。**判定ロジックをAPI層に再実装しない。**
 **REFACTOR**: 検証呼び出し列の関数分割まで。
 **検証**: `pytest tests/integration/test_voices_create_api.py -q`（FFmpeg必須）
 **完了条件**: AC-02 / AC-03 / AC-04 のAPI側が成功。
+
+---
+
+### 2.3.1 T-303 実装詳細（改訂3で確定。本節が T-303 の正）
+
+本節は §2.3 を置き換えるものではなく、**§2.3 で未定義だった箇所を確定させる**。
+§2.3 と本節が矛盾する場合は**本節を正**とする。
+本節の実装は **`domain/**` / `storage/**` / `media/**` / `worker/**` / `api/app.py` を一切変更せずに完結する**
+（使用する既存関数は §2.3.1-H に列挙。すべて現行シグネチャのまま呼べることを Claude が確認済み）。
+
+#### A. `VoiceDraft` の定義（`src/koeclone/api/voices.py` に置く）
+
+```python
+@dataclass(frozen=True)
+class VoiceDraft:
+    draft_id: str                      # UUID4文字列。app.state.drafts のキーと同一
+    source_mode: str                   # "direct_recording" | "file_upload"
+    source_format: str                 # "wav" | "mp3" | "webm" | "ogg" | "mp4"
+    source_sha256: str                 # 受信した元バイト列のSHA-256（FR-109「元音声SHA-256」）
+    reference_path: Path               # paths.temporary 配下の正規化済み参照WAV（試聴もこれを返す）
+    duration_ms: int                   # reference_path の長さ
+    sample_rate: int                   # reference_path の実サンプリング周波数（24000）
+    channels: int                      # reference_path の実チャンネル数（1）
+    consent_text: str
+    consent_method: ConsentMethod      # domain/consent.ConsentMethod
+    consent_audio_path: Path | None    # paths.temporary 配下の正規化済み同意WAV（direct_recordingのみ）
+    temporary_paths: tuple[Path, ...]  # confirm時に削除する全一時ファイル（上記2つを含む）
+```
+
+- **`reference_sha256` / `consent_audio_sha256` はドラフトに持たない。** confirm 時に
+  **最終保存先のファイルから計算する**（保存前後でのハッシュ齟齬を構造的に排除するため）。
+- ドラフトは `app.state.drafts[draft_id] = draft` で保持し、**永続化しない**。
+  confirm 成功時に `del app.state.drafts[draft_id]` する。TTL・件数上限は設けない
+  （単一利用者ローカルアプリのため。**新機能を足さない**）。
+
+#### B. `stage=validate` の完全な処理順（この順序を守る）
+
+| # | 処理 | 失敗時 |
+|---|---|---|
+| 1 | `stage` が `"validate"` / `"confirm"` 以外 | `400 ERR_BAD_REQUEST` |
+| 2 | `source_mode` が `"direct_recording"` / `"file_upload"` 以外 | `400 ERR_BAD_REQUEST` |
+| 3 | `consent_accepted.strip().casefold() != "true"` | `403 ERR_NO_CONSENT` |
+| 4 | `consent_text.strip() == ""` | `403 ERR_NO_CONSENT` |
+| 5 | `direct_recording` かつ `consent_audio` 欠落（またはバイト長0） | `403 ERR_NO_CONSENT`（RED#16） |
+| 6 | `file_upload` かつ `consent_audio` が付与されている | `400 ERR_BAD_REQUEST`（RED#19） |
+| 7 | `audio` の許可判定（§2.3.1-C の表） | `422 ERR_FILE_UNSUPPORTED_FORMAT` |
+| 8 | 一時保存（§2.3.1-D）してサイズ確認 | `422 ERR_FILE_TOO_LARGE` |
+| 9 | 形式・長さ検証（§2.3.1-C） | 各 `ERR_FILE_*` / `ERR_AUDIO_TOO_SHORT` / `ERR_AUDIO_TOO_LONG` |
+| 10 | 正規化（`file_upload` は参照区間抽出まで。§2.3.1-C） | `500 ERR_INTERNAL` |
+| 11 | `consent_audio` の検証・正規化（`direct_recording` のみ。§2.3.1-G） | §2.3.1-G の表 |
+| 12 | 品質検査 `validate_audio_quality`（§2.3.1-E） | `422 ERR_AUDIO_*` |
+| 13 | `VoiceDraft` を組み立てて `app.state.drafts` へ登録し `200` を返す | — |
+
+**失敗した場合は、その時点までに作成した一時ファイルを削除してからエラーを返す**
+（`try/finally` ではなく明示的な削除で可。`paths.temporary` に失敗残骸を残さない）。
+
+#### C. 形式・長さ検証（モード別。ここが §2.3 の矛盾点の裁定）
+
+**許可表**（`declared_mime` は `;` 以降を落とし `strip().casefold()` して比較する。
+ブラウザは `audio/webm;codecs=opus` のように送るため）:
+
+| `source_mode` | 拡張子の扱い | 許可する MIME | `source_format` |
+|---|---|---|---|
+| `file_upload` | `.wav` / `.mp3` のみ許可（`Path(filename).suffix.casefold()`。それ以外・空は `ERR_FILE_UNSUPPORTED_FORMAT`） | `audio/wav`, `audio/wave`, `audio/x-wav` / `audio/mpeg`, `audio/mp3` | `"wav"` / `"mp3"` |
+| `direct_recording` | **判定に使わない**（ブラウザ録音にファイル名が無いため） | `audio/webm`, `video/webm`, `audio/ogg`, `application/ogg`, `audio/mp4`, `video/mp4`, `audio/wav`, `audio/wave`, `audio/x-wav` | MIMEサブタイプから `"webm"` / `"ogg"` / `"mp4"` / `"wav"` |
+
+**`file_upload`（既存関数をそのまま使う）**
+
+```python
+error = validate_audio_file(
+    temp_path,                 # 拡張子は .wav / .mp3（§2.3.1-D）
+    declared_mime,             # ; 以降を落とした値
+    make_probe(),              # media/ffmpeg.make_probe()
+    config=request.app.state.config,
+)
+if error is not None:
+    raise KoecloneError(error)
+```
+サイズ・拡張子・シグネチャ・MIME・probe・音声トラック有無・コーデック・長さ（10〜180秒）を
+**この1回の呼び出しがすべて判定する**。API層で再実装しない。
+
+**`direct_recording`（`validate_audio_file` は使えない。以下の順で判定する）**
+
+| # | 判定 | 失敗時 |
+|---|---|---|
+| 1 | `temp_path.stat().st_size > config.max_upload_bytes` | `ERR_FILE_TOO_LARGE` |
+| 2 | `probe_audio(temp_path)` が `OSError` / `ValueError` を送出 | `ERR_FILE_CORRUPTED` |
+| 3 | `result.encrypted` | `ERR_FILE_CORRUPTED` |
+| 4 | `not result.has_audio` | `ERR_FILE_NO_AUDIO` |
+| 5 | `result.duration_seconds is None or <= 0` | `ERR_FILE_CORRUPTED` |
+| 6 | `duration_seconds < config.direct_recording_seconds[0]`（10.0） | `ERR_AUDIO_TOO_SHORT` |
+| 7 | `duration_seconds > config.direct_recording_seconds[1]`（60.0） | `ERR_AUDIO_TOO_LONG` |
+
+**コーデック名の照合は行わない**（webm/ogg/mp4 の中身は opus / vorbis / aac と多様なため。
+デコード可能であることを probe が保証すれば足りる）。
+
+**正規化**
+
+- 共通: `normalize_to_reference_wav(temp_source, normalized_path)`（モノラル24kHz・`pcm_s16le`）。
+- `direct_recording`: これで確定。`reference_path = normalized_path`。
+- `file_upload`（FR-107）:
+  ```python
+  total_seconds = wav_duration_ms(normalized_path) / 1000
+  if total_seconds < 10.0:                      # 正規化での端数落ちを吸収
+      raise KoecloneError(ErrorCode.ERR_AUDIO_TOO_SHORT)
+  ranges = detect_silence_ranges(normalized_path)
+  start, duration = select_reference_window(total_seconds, ranges)
+  extract_reference_segment(
+      normalized_path, reference_path,
+      start_seconds=start, duration_seconds=duration,
+  )
+  ```
+  `select_reference_window` は 10〜30秒に収めて返すため、`extract_reference_segment` の
+  `ValueError`（10〜30秒外）は上の `total_seconds` ガードにより発生しない。
+
+#### D. 一時ファイルの命名（S-5 厳守。利用者入力を `Path` 連結に使わない）
+
+すべて `storage_path(paths.temporary, uuid4(), <suffix>)` で作る（`ALLOWED_SUFFIXES` の範囲内）。
+
+| 用途 | suffix | 備考 |
+|---|---|---|
+| アップロード元（`file_upload`） | `.wav` または `.mp3` | **クライアント申告の拡張子に一致させる**。`validate_audio_file` が拡張子とシグネチャの不一致（偽装）を検出するため（RED#5） |
+| 録音元（`direct_recording`） | `.tmp` | 拡張子は判定に使わない |
+| 同意録音元 | `.tmp` | 同上 |
+| 正規化フルWAV（`file_upload` の中間） | `.wav` | 参照区間抽出の入力。confirm 時に削除 |
+| 参照WAV（ドラフト試聴の実体） | `.wav` | `VoiceDraft.reference_path` |
+| 同意WAV（正規化後） | `.wav` | `VoiceDraft.consent_audio_path` |
+
+**利用者が送ったファイル名・`display_name` は保存パスに一切使わない**（RED#15）。
+
+#### E. 正規化WAVから float サンプルを読む規約
+
+`validate_audio_quality(samples, sample_rate, source_mode, config=...)` へ渡す値は、
+**`voices.py` 内の私的ヘルパで標準ライブラリのみを使って読む**（新規依存を足さない）。
+
+```python
+def _read_wav_samples(path: Path) -> tuple[list[float], int]:
+    with wave.open(str(path), "rb") as source:
+        if source.getnchannels() != 1 or source.getsampwidth() != 2:
+            raise KoecloneError(ErrorCode.ERR_INTERNAL)   # 正規化済みなら起こらない
+        sample_rate = source.getframerate()
+        frames = source.readframes(source.getnframes())
+    pcm = array("h")            # from array import array / 16bit signed
+    pcm.frombytes(frames)
+    return [value / 32768.0 for value in pcm], sample_rate
+```
+
+- **除数は `32768.0` 固定**（フルスケール `±32767` → `0.99997` となり
+  `AppConfig.absolute_sample_limit = 0.999` を超えるので RED#8 のクリッピング検出が成立する）。
+- リトルエンディアン前提。`array` は実行環境依存のため、
+  `sys.byteorder != "little"` のときは `pcm.byteswap()` を呼ぶ。
+- `source_mode` は `AudioSourceMode(draft の source_mode 文字列)` で変換する。
+- `config` は `request.app.state.config` を渡す。
+- **検査対象は §2.3.1-C で確定した `reference_path`**（`file_upload` は抽出後の10〜30秒区間）。
+- テスト音声は処理コストを抑えるため **12秒以内**を推奨（10秒下限は満たすこと）。
+
+#### F. 不正入力とエラーコードの完全表（この表以外の対応を作らない）
+
+| 入力 | HTTP / ErrorCode |
+|---|---|
+| `stage` が `validate` / `confirm` 以外 | `400 ERR_BAD_REQUEST` |
+| `source_mode` が2値以外 | `400 ERR_BAD_REQUEST` |
+| 必須フォーム項目の欠落（`stage` / `source_mode` / `audio` / `draft_id` 等） | `400 ERR_BAD_REQUEST`（T-301 の `RequestValidationError` ハンドラ） |
+| `consent_accepted != "true"`（前後空白を除去し casefold 比較） | `403 ERR_NO_CONSENT` |
+| `consent_text` が空・空白のみ | `403 ERR_NO_CONSENT` |
+| `direct_recording` で `consent_audio` 欠落・0バイト | `403 ERR_NO_CONSENT` |
+| `file_upload` に `consent_audio` を付与 | `400 ERR_BAD_REQUEST` |
+| `display_name` が strip 後 **50コードポイント超**（`len(value)` で数える） | `400 ERR_BAD_REQUEST` |
+| `display_name` 未指定・strip後が空 | エラーにせず既定 `"マイボイス"` |
+| `draft_id` が未知・UUID形式でない（**confirm のフォーム項目**） | `404 ERR_DRAFT_NOT_FOUND` |
+| `draft_id` がUUID形式でない（**`GET /api/voices/draft/{draft_id}/audio` のパス**） | `400 ERR_BAD_REQUEST`（§1.3。`draft_id: uuid.UUID` で受ける） |
+| 同パスで未知の `draft_id` | `404 ERR_DRAFT_NOT_FOUND` |
+| ドラフトは存在するが一時ファイルが消えている | `500 ERR_INTERNAL` |
+| confirm 時に既存プロフィールあり | `409 ERR_PROFILE_ALREADY_EXISTS` |
+
+**`StorageError` の変換（見落とし注意）**: `storage/db.py` の `StorageError` は `KoecloneError` の
+サブクラスではないため、T-301 の例外ハンドラでは `500 ERR_INTERNAL` になる。
+`create_voice_profile()` を呼ぶ箇所で `StorageError` を捕捉し、
+`raise KoecloneError(error.code) from error` へ変換すること（同時実行時の 409 を保証する）。
+事前に `get_current_voice_profile() is not None` でも判定してよいが、**変換は必須**。
+
+#### G. `consent_audio` の扱い（`direct_recording` のみ）
+
+| # | 判定 | 失敗時 |
+|---|---|---|
+| 1 | MIME が §2.3.1-C の `direct_recording` 許可表にない | `422 ERR_FILE_UNSUPPORTED_FORMAT` |
+| 2 | サイズ > `config.max_upload_bytes` | `422 ERR_FILE_TOO_LARGE` |
+| 3 | `probe_audio` が `OSError` / `ValueError` を送出、または `duration_seconds is None or <= 0` | `422 ERR_FILE_CORRUPTED` |
+| 4 | `not has_audio` | `422 ERR_FILE_NO_AUDIO` |
+| 5 | 正規化 `normalize_to_reference_wav`（モノラル24kHz WAV） | `500 ERR_INTERNAL` |
+
+- **長さの上下限検証・品質検査（`validate_audio_quality`）は行わない。**
+  同意録音は合成の参照音声ではなく**同意の証跡**（FR-003 / FR-009）であり、
+  仕様に長さ・品質の要件が無いため。**推測で閾値を作らない。**
+- 保存形式は `.wav`（`storage_path` の `ALLOWED_SUFFIXES` と `collect_deletion_targets` の想定に一致）。
+- `consent_method` は `direct_recording` → `ConsentMethod.LIVE_CHALLENGE`、
+  `file_upload` → `ConsentMethod.UPLOAD_DECLARATION`。
+- `consent_text` の内容は**非空であることのみ**を検証する（チャレンジ文との一致照合はしない。
+  FR-003 は「毎回異なる同意文を提示して読み上げさせる」までを要求しており、
+  音声認識による照合は MVP の要件に無い）。
+
+#### H. `stage=confirm` のフィールド写像（この表のとおりに埋める）
+
+**資産IDの規約（T-304 の削除処理が成立する前提）**:
+参照音声・同意録音・キャッシュのファイル名はすべて **`voice_profiles.id`（= `profile_id`）**を識別子にする。
+
+```python
+profile_id  = str(uuid4())
+reference   = storage_path(paths.references, profile_id, ".wav")   # 一時参照WAVをコピー
+consent_wav = storage_path(paths.consent,    profile_id, ".wav")   # direct_recording のみ
+# → T-304 は collect_deletion_targets(paths, reference_id=profile.id,
+#      consent_id=profile.id if profile.consent_audio_path else None, job_ids=[...]) で削除できる
+```
+
+**`VoiceProfile`（14フィールド）**
+
+| フィールド | 値 |
+|---|---|
+| `id` | `profile_id` |
+| `display_name` | フォーム値を strip。空なら `"マイボイス"` |
+| `source_mode` | `draft.source_mode` |
+| `source_format` | `draft.source_format` |
+| `source_sha256` | `draft.source_sha256`（**元バイト列**のハッシュ。FR-109） |
+| `reference_path` | `str(reference)` |
+| `reference_sha256` | **保存後の** `reference` から計算 |
+| `consent_method` | `draft.consent_method.value` |
+| `consent_text` | `draft.consent_text` |
+| `consent_audio_path` | `str(consent_wav)` / `file_upload` は `None` |
+| `consent_audio_sha256` | **保存後の** `consent_wav` から計算 / `file_upload` は `None` |
+| `created_at` | `record.consented_at`（下の `ConsentRecord` と同一時刻。FR-009） |
+| `engine` | `request.app.state.engine.engine_name` |
+| `model_version` | `request.app.state.engine.model_version`（`load()` を呼ばずに読める） |
+
+`ConsentRecord` は次で作る（戻り値は `created_at` の source としてのみ使い、**DBの独立テーブルは作らない**。
+同意情報は `voice_profiles` の3列が保持する）:
+
+```python
+record = build_consent_record(
+    method=draft.consent_method,
+    consent_text=draft.consent_text,
+    source_audio_sha256=draft.source_sha256,
+    app_version=config.app_version,
+    consent_audio_sha256=consent_audio_sha256,   # upload_declaration では必ず None
+)
+```
+
+**SHA-256 の計算対象**（`hashlib.sha256` の16進小文字。1MiB チャンク読み）:
+
+| 値 | 対象 |
+|---|---|
+| `source_sha256` | 受信した**元ファイルのバイト列**（正規化前。validate 時に算出） |
+| `reference_sha256` | `paths.references` に**保存後**の参照WAV |
+| `consent_audio_sha256` | `paths.consent` に**保存後**の同意WAV |
+
+**テスト文ジョブ `SynthesisJob`（16フィールド。FR-111）**
+
+```python
+TEST_SENTENCE = "これはテスト用の音声です。声の確認にお使いください。"
+synthesis_text, error = build_synthesis_text(TEST_SENTENCE, [], config=config)
+if error is not None or synthesis_text is None:
+    raise KoecloneError(ErrorCode.ERR_INTERNAL)
+```
+
+| フィールド | 値 |
+|---|---|
+| `id` | `str(uuid4())`（応答の `test_synthesis_id`） |
+| `voice_id` | `profile_id` |
+| `text` | `TEST_SENTENCE` |
+| `text_sha256` | `sha256(TEST_SENTENCE.encode("utf-8")).hexdigest()` |
+| `synthesis_text` | 上の `synthesis_text` |
+| `synthesis_text_sha256` | `sha256(synthesis_text.encode("utf-8")).hexdigest()` |
+| `pronunciation_overrides` | `"[]"`（JSON文字列） |
+| `language` | `"ja"` |
+| `status` | `"queued"` |
+| `audio_path` | `None` |
+| `sidecar_path` | `None` |
+| `duration_ms` | `None` |
+| `watermark_detected` | `None` |
+| `error_code` | `None` |
+| `created_at` | `datetime.now(UTC).isoformat()` |
+| `completed_at` | `None` |
+
+**confirm の実行順**（§2.3 の6ステップを詳細化。この順序を守る）:
+
+1. `stage` 検証 → 2. `draft_id` 解決（404） → 3. `consent_accepted`（403） →
+4. `display_name` 検証（400） → 5. 既存プロフィール判定（409） →
+6. 参照WAVを `paths.references` へコピー → 7. 同意WAVを `paths.consent` へコピー →
+8. `build_consent_record` → 9. `create_voice_profile`（`StorageError` → 409 変換） →
+10. **一時ファイル全削除**（`draft.temporary_paths` を `unlink(missing_ok=True)`）＋ `app.state.drafts` から除去 →
+11. `create_synthesis_job` → `app.state.queue.submit(job_id)` → `201` を返す
+
+9 より後で失敗した場合も**プロフィールは残す**（ロールバックしない）。
+`queue.submit` の失敗は `500 ERR_INTERNAL`。
+
+#### I. 使用する既存関数（すべて現行のまま。変更禁止ファイルへの変更は不要）
+
+| モジュール | 使う関数・型 |
+|---|---|
+| `domain/file_probe` | `validate_audio_file`（`file_upload` のみ） |
+| `domain/audio_quality` | `validate_audio_quality`, `AudioSourceMode` |
+| `domain/consent` | `ConsentMethod`, `build_consent_record` |
+| `domain/synthesis_text` | `build_synthesis_text`（テスト文ジョブ用） |
+| `media/ffmpeg` | `make_probe`, `probe_audio`, `normalize_to_reference_wav`, `detect_silence_ranges`, `select_reference_window`, `extract_reference_segment`, `wav_duration_ms` |
+| `storage/files` | `storage_path`（`DataPaths` は `app.state.paths`） |
+| `storage/db` | `VoiceProfile`, `SynthesisJob`, `StorageError`, `create_voice_profile`, `get_current_voice_profile`, `create_synthesis_job` |
+| `worker/queue` | `JobQueue.submit`（`app.state.queue`） |
+| `errors` | `ErrorCode`, `KoecloneError` |
+| 標準ライブラリ | `wave`, `array`, `hashlib`, `shutil`, `uuid`, `datetime` |
+
+**`subprocess` を直接呼ばない（S-6）。`pyproject.toml` を変更しない。**
 
 ---
 
@@ -941,3 +1263,24 @@ T-301 の実装レビューで、**契約に書かれていないために抜け
 | 1 | 未捕捉例外（`KoecloneError` / `StarletteHTTPException` 以外）の応答形が未定義。Starlette 既定のプレーンテキスト `Internal Server Error` が漏れても契約違反にならなかった | `Exception` の catch-all を必須化。`500 ERR_INTERNAL` ＋ `error_id`、本文に例外文言・内部パスを含めない | §1.2 catch-all、§2.1 GREEN、RED#13 |
 | 2 | S-3 が「`Content-Length` 詐称に備え受信バイト数でも計測」を要求しているのに、対応する RED が存在せず、宣言値チェックのみでも RED#3 を通過できた | 生ASGI でボディをストリーム送出する詐称テストを RED に追加。純ASGIミドルウェア実装を明記 | §2.1 RED#11、GREEN |
 | 3 | §1.2 表は 405 に `ERR_ROUTE_NOT_FOUND` を割り当てるが RED が無く、405 を 404 へ丸めても検出できなかった | 405 の状態コード維持を明記し RED を追加 | §1.2 注記、§2.1 RED#12 |
+
+### 2026-08-12 改訂3（T-303 着手前 / Codex報告の§0.6停止に対するClaude裁定）
+
+Codex から T-303 の未定義・矛盾6件の報告を受け、Claude が **§2.3.1 を新設**して確定した。
+**コード変更前**の改訂であり、既存の実装・テストへの影響はない。
+既存の `domain/**` / `storage/**` / `media/**` / `worker/**` / `api/app.py` は**変更不要**であることを確認した（§2.3.1-I）。
+
+| # | 報告された未定義・矛盾 | 裁定 | 変更箇所 |
+|---|---|---|---|
+| 1 | `VoiceDraft` が §1.6 に名前だけ登場し、フィールド・所有場所・一時ファイル構成が未定義 | **T-303 が `api/voices.py` に定義**（`app.py` は空辞書のみで import しない）。11フィールドを確定。ハッシュ2件はドラフトに持たず confirm 時に最終ファイルから計算する | §1.6 注記、§2.3.1-A / -D |
+| 2 | `validate_audio_file` は WAV/MP3 専用だが `direct_recording` は webm/ogg/mp4/wav を要求しており矛盾 | **モードで部品を分ける**。`file_upload` は `validate_audio_file` 1回で完結。`direct_recording` は同関数を**使わず**「MIME許可表 → `probe_audio` → 長さ判定」の7段で判定する。コーデック名照合は行わない | §2.3 処理順2・3、§2.3.1-C |
+| 3 | `consent_audio` の形式検証・長さ・正規化・保存形式が未定義 | MIME許可表＋`probe_audio`＋正規化のみ。**長さ上下限と品質検査は課さない**（同意録音は証跡であり、仕様に閾値が無いため推測で作らない）。保存は `.wav` | §2.3.1-G |
+| 4 | 正規化WAV → float サンプルの読み出し規約が未定義 | 標準ライブラリ `wave` + `array` の私的ヘルパ。**除数 `32768.0` 固定**（フルスケールが `absolute_sample_limit=0.999` を超え RED#8 が成立する）。バイトオーダー処理を明記 | §2.3.1-E |
+| 5 | confirm 時の `VoiceProfile` 14項目・`SynthesisJob` 16項目の写像が未定義 | 全項目の写像表を確定。**参照音声・同意録音・キャッシュの識別子を `voice_profiles.id` に統一**し、T-304 の `collect_deletion_targets` が成立するようにした。`StorageError` は `KoecloneError` ではないため 409 への明示変換を必須化 | §2.3.1-F / -H |
+| 6 | `stage` / `source_mode` / `display_name>50` 等の不正値に返すコードが未定義 | 不正入力の完全表を確定（いずれも既存の列挙子のみを使用。**`ErrorCode` は追加しない**）。対応する RED を3件追加 | §2.3.1-F、§2.3 RED#17〜19 |
+
+あわせて、着手後に不安定化する以下1点を先回りで確定した（Codexからの報告事項ではない）。
+
+| # | 論点 | 裁定 | 変更箇所 |
+|---|---|---|---|
+| 7 | RED#11（確定後 `paths.temporary` が空）は、テスト文ジョブが `paths.temporary` に作業ディレクトリを作るため競合で不安定になる | 検査前に `app.state.queue.wait_for(test_synthesis_id)` でジョブ終了を待つことを必須化 | §2.3 RED#11 |
