@@ -136,4 +136,8 @@ export async function initRecording() {
       document.querySelector('[data-section="synthesis"]').click();
     } catch (error) { showError(error); confirm.disabled = false; }
   });
+  document.addEventListener("koeclone:profile-deleted", () => {
+    reset();
+    start.disabled = sessionStorage.getItem("koeclone_usage_consent") !== "true";
+  });
 }

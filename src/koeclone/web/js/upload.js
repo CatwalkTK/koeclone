@@ -101,4 +101,5 @@ export function initUpload() {
       document.querySelector('[data-section="synthesis"]').click();
     } catch (error) { showError(error); confirm.disabled = false; }
   });
+  document.addEventListener("koeclone:profile-deleted", reset);
 }

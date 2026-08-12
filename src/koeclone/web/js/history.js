@@ -84,5 +84,6 @@ export function initHistory() {
     catch (error) { showError(error); }
   });
   document.addEventListener("koeclone:section", (event) => { if (event.detail.name === "history") loadHistory(); });
+  document.addEventListener("koeclone:profile-deleted", loadHistory);
   loadHistory();
 }

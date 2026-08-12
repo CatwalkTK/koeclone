@@ -70,6 +70,9 @@ blockquote { margin: 0; padding: 1.25rem; border-left: 4px solid var(--green); b
 .section-heading, .history-item header, .history-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .empty { color: var(--muted); text-align: center; padding: 2rem; }
 audio { width: 100%; }
+#profile-status:empty { display: none; }
+#profile-status { margin: .75rem 0; color: var(--muted); line-height: 1.6; }
+#profile-card .note { margin: 0; color: var(--muted); line-height: 1.6; }
 footer { display: flex; justify-content: space-between; gap: 1rem; padding: 1.5rem clamp(1rem, 4vw, 4rem); color: var(--muted); border-top: 1px solid var(--line); font-size: .82rem; }
 [hidden] { display: none !important; }
 @media (max-width: 650px) { .privacy-badge { display: none; } .rule-grid { grid-template-columns: 1fr; } .section-heading { align-items: flex-start; flex-direction: column; } footer { flex-direction: column; } }

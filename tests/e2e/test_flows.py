@@ -203,9 +203,13 @@ def test_profile_delete_removes_history_and_audio(
     page.get_by_role("button", name="履歴").click()
     expect(page.locator(".history-item")).to_have_count(2)
     assert page.request.get(f"{live_url}/api/voices/current").status == 200
-    # UI にプロフィール削除の操作要素が存在しないため、AC-09 の削除確定は API で行う。
-    # UI導線の欠落はゲートレビューの申し送り（T-314）として記録済み。
-    assert page.request.delete(f"{live_url}/api/voices/current").status == 204
+    page.get_by_role("button", name="声の登録").click()
+    expect(page.locator("#profile-card")).to_be_visible()
+    page.once("dialog", lambda dialog: dialog.accept())
+    page.locator("#profile-delete").click()
+    expect(page.locator("#profile-status")).to_contain_text(
+        "音声プロフィールを削除しました"
+    )
     assert page.request.get(f"{live_url}/api/voices/current").status == 404
     assert page.request.get(f"{live_url}/api/syntheses/{job_id}").status == 404
     assert page.request.get(f"{live_url}/api/syntheses/{job_id}/audio").status == 404
@@ -214,3 +218,72 @@ def test_profile_delete_removes_history_and_audio(
     page.get_by_role("button", name="履歴").click()
     expect(page.locator(".history-item")).to_have_count(0)
     expect(page.locator("#history-list .empty")).to_be_visible()
+
+
+def test_profile_delete_from_ui_resets_screens(
+    page: Page, live_url: str, audio_files: dict[str, Path]
+) -> None:
+    _register_upload(page, live_url, audio_files["wav"])
+    _generate(page, "削除後に画面が初期化されること。")
+    # 履歴を先に開いて一覧をDOMへ描画させる。ここを省くと history.js の初期
+    # loadHistory（0件時点）の結果が残ったままになり、削除後の「0件」検証が
+    # 購読の有無に関わらず成立してしまう。
+    page.get_by_role("button", name="履歴").click()
+    expect(page.locator(".history-item")).to_have_count(2)
+    page.get_by_role("button", name="声の登録").click()
+    expect(page.locator("#profile-card")).to_be_visible()
+    expect(page.locator("#profile-summary")).to_contain_text("マイボイス")
+    # 録音ペインを「エラー＋破棄導線が出た」状態に汚しておく。
+    # 10秒未満で停止するとクライアント側の長さ検証で失敗するだけで、
+    # API は呼ばれない（record.js の recordingLengthError）。
+    # これをしないと録音ペインは初期状態のままで、record.js の
+    # koeclone:profile-deleted 購読が無くても手順7が通ってしまう。
+    page.get_by_role("tab", name="直接録音").click()
+    page.locator("#record-start").click()
+    expect(page.locator("#record-state")).to_have_text("録音中")
+    page.locator("#record-stop").click()
+    expect(page.locator("#record-error")).to_be_visible()
+    expect(page.locator("#record-discard")).to_be_visible()
+
+    page.once("dialog", lambda dialog: dialog.dismiss())
+    page.locator("#profile-delete").click()
+    expect(page.locator("#profile-card")).to_be_visible()
+    assert page.request.get(f"{live_url}/api/voices/current").status == 200
+
+    messages: list[str] = []
+
+    def accept_delete(dialog) -> None:
+        messages.append(dialog.message)
+        dialog.accept()
+
+    page.once("dialog", accept_delete)
+    page.locator("#profile-delete").click()
+    expect(page.locator("#profile-card")).to_have_attribute("hidden", "")
+    expect(page.locator("#profile-status")).to_contain_text(
+        "音声プロフィールを削除しました"
+    )
+    expect(page.locator("#profile-status")).to_be_focused()
+    assert "マイボイス" in messages[0]
+    assert "元に戻せません" in messages[0]
+    assert page.locator("#synthesis-player").evaluate(
+        "node => node.hidden && !node.getAttribute('src')"
+    )
+    assert page.locator("#synthesis-download").evaluate(
+        "node => node.hidden && node.getAttribute('href') === null"
+    )
+    assert page.locator("#upload-confirm").evaluate("node => node.hidden")
+    expect(page.locator("#voice-file")).to_have_value("")
+    assert page.locator("#record-confirm").evaluate("node => node.hidden")
+    # to_be_hidden() は使わない。タブ切替で祖先ごと隠れても成立してしまうため、
+    # 要素自身の hidden プロパティを評価する（手順6と同じ理由）。
+    assert page.locator("#record-error").evaluate("node => node.hidden")
+    assert page.locator("#record-discard").evaluate("node => node.hidden")
+    # 履歴は「遷移する前」に空になっていること。遷移は koeclone:section で
+    # loadHistory を再実行するため、遷移後だけでは history.js の
+    # koeclone:profile-deleted 購読の有無を判別できない。
+    expect(page.locator(".history-item")).to_have_count(0)
+    expect(page.locator("#history-delete-all")).to_be_disabled()
+    page.get_by_role("button", name="履歴").click()
+    expect(page.locator(".history-item")).to_have_count(0)
+    expect(page.locator("#history-delete-all")).to_be_disabled()
+    assert page.request.get(f"{live_url}/api/voices/current").status == 404

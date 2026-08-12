@@ -150,4 +150,10 @@ export function initSynthesis() {
   });
 
   document.addEventListener("koeclone:synthesis-job", (event) => pollJob(event.detail.id));
+  document.addEventListener("koeclone:profile-deleted", () => {
+    pollGeneration++;
+    progress.hidden = true;
+    clearOutput();
+    download.removeAttribute("href");
+  });
 }

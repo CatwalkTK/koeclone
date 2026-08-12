@@ -46,6 +46,7 @@ for (const [path, initializer] of [
   ["./upload.js", "initUpload"],
   ["./synthesis.js", "initSynthesis"],
   ["./history.js", "initHistory"],
+  ["./profile.js", "initProfile"],
 ]) {
   import(path).then((module) => module[initializer]?.()).catch(() => {});
 }

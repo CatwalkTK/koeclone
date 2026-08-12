@@ -53,6 +53,14 @@
         <p class="eyebrow">声の登録</p>
         <h1 id="register-title">声のもとを用意する</h1>
         <p class="lead">静かな場所で直接録音するか、本人のWAV / MP3ファイルを選んでください。</p>
+        <section id="profile-card" class="workspace-card" aria-labelledby="profile-card-title" hidden>
+          <h2 id="profile-card-title">登録済みの声</h2>
+          <p id="profile-summary"></p>
+          <p class="note">削除すると、参照音声・同意録音・生成した音声とサイドカー・生成履歴がすべて消えます。元に戻せません。</p>
+          <button id="profile-delete" class="danger" type="button">登録した声を削除</button>
+        </section>
+        <p id="profile-status" role="status" tabindex="-1"></p>
+        <div id="profile-error" class="alert" role="alert" hidden></div>
         <div class="mode-tabs" role="tablist" aria-label="登録方法">
           <button type="button" role="tab" data-register-mode="record" aria-selected="true">直接録音</button>
           <button type="button" role="tab" data-register-mode="upload" aria-selected="false">ファイル</button>
