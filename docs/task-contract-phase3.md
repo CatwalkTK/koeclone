@@ -1195,7 +1195,7 @@ src/koeclone/web/js/api.js
 | 既存へ追記 | `src/koeclone/web/index.html` | §2.14.2 のマークアップ追加のみ |
 | 既存へ追記 | `src/koeclone/web/style.css` | §2.14.7 の1ルールのみ |
 | 既存へ追記 | `src/koeclone/web/js/app.js` | 初期化リストに1行追加のみ |
-| 既存へ追記 | `src/koeclone/web/js/record.js` / `upload.js` / `synthesis.js` / `history.js` | §2.14.5 の表に定めるイベント購読のみ（各1〜3行） |
+| 既存へ追記 | `src/koeclone/web/js/record.js` / `upload.js` / `synthesis.js` / `history.js` | §2.14.5 の表に定めるイベント購読のみ（各1〜3行。`synthesis.js` のみ §2.14.5 の裁定により**最大4行**） |
 | 既存へ追記 | `tests/e2e/test_flows.py` | §2.14.8 のシナリオ追加・改訂のみ |
 
 **T-307〜T-313 の所有ファイルへ例外的に追記を許可する**が、許可範囲は上表と §2.14.5 / §2.14.8 に
@@ -1283,9 +1283,23 @@ src/koeclone/web/js/api.js
 |---|---|
 | `record.js` | 既存の `reset()` を呼び、`start.disabled` を同意状態に戻す（既存 `discard` ハンドラと同じ2行）。録音ドラフト（`draftId` / `blob` / 試聴 `<audio>` / 「この声で確定」）が消える |
 | `upload.js` | 既存の `reset()` を呼ぶ。ファイル選択・権利確認2件・`draftId`・試聴・「この声で確定」が消える |
-| `synthesis.js` | `pollGeneration` を1増やして進行中のポーリングを無効化し、`progress.hidden = true`、既存の `clearOutput()` を呼ぶ（プレイヤー `src` 除去・非表示、ダウンロードリンク非表示、エラー非表示） |
+| `synthesis.js` | `pollGeneration` を1増やして進行中のポーリングを無効化し、`progress.hidden = true`、既存の `clearOutput()` を呼び、**続けて `download.removeAttribute("href")` を実行する**（計4行。下の「裁定」を参照） |
 | `history.js` | 既存の `loadHistory()` を呼ぶ。一覧が空になり「すべて記録削除」ボタンが `disabled` になる |
 | `profile.js` | 上記 手順2〜4 |
+
+**裁定（`synthesis.js` の4行目 `download.removeAttribute("href")` を明示的に許可する）**
+
+既存の `clearOutput()`（`synthesis.js:39`）は `download.hidden = true` のみで、成功時に設定された
+`href`（`synthesis.js:131` の `/api/syntheses/{jobId}/audio`）を残す。したがって購読処理を
+「`pollGeneration` / `progress.hidden` / `clearOutput()`」の3件に限ると、削除後も
+`#synthesis-download` に前ジョブのURLが残り、§2.14.8(b) 手順6 の必須検証を満たせない。
+`clearOutput()` 自体の書き換えは §2.14.1 の「既存の関数・既存の振る舞いを書き換えない」に反し、
+生成フロー（`preview` / `generate` / `pollJob` の3経路）の振る舞いも変えてしまうため採らない。
+よって**購読処理側に4行目 `download.removeAttribute("href")` を追加することのみを許可**し、
+§2.14.1 の行数上限を `synthesis.js` に限り 4行へ整合させる。
+`href` は空文字や `"#"` の再代入ではなく**属性ごと除去**すること（手順6 の判定式を決定的にするため）。
+`download` は `initSynthesis()` スコープの既存 const（`synthesis.js:30`）をそのまま参照し、
+購読は既存の `koeclone:synthesis-job` 購読（`synthesis.js:152`）と同じく `initSynthesis()` 末尾に置く。
 
 - **`#synthesis-text` の本文と読み修正一覧は消さない。** 利用者が入力した文章はプロフィール由来のデータではなく、
   削除対象（AC-09）に含まれない。`#ai-disclosure` のチェック状態も変更しない。
@@ -1342,7 +1356,7 @@ src/koeclone/web/js/api.js
 | 3 | **キャンセル経路**: `page.once("dialog", lambda d: d.dismiss())` → `#profile-delete` をクリック → `#profile-card` が可視のまま、`GET /api/voices/current` が `200` |
 | 4 | **ダイアログ文言**: 承諾時に `dialog.message` を捕捉し、「マイボイス」と「元に戻せません」を含むこと |
 | 5 | 承諾 → **リロードせずに** `#profile-card` が `hidden`、`#profile-status` が「音声プロフィールを削除しました」を含む、`#profile-status` にフォーカスがあること |
-| 6 | 合成UI: `page.locator("#synthesis-player").evaluate("n => n.hidden && !n.getAttribute('src')")` が真。`#synthesis-download` も同様に `hidden` かつ `href` が前ジョブのURLでないこと |
+| 6 | 合成UI: `page.locator("#synthesis-player").evaluate("n => n.hidden && !n.getAttribute('src')")` が真。`#synthesis-download` は `page.locator("#synthesis-download").evaluate("n => n.hidden && n.getAttribute('href') === null")` が真（§2.14.5 の裁定により属性ごと除去されるため。`href` が前ジョブのURL `/api/syntheses/{id}/audio` のまま残っていれば失敗する） |
 | 7 | 登録UI: `#upload-confirm` が `hidden`、`#voice-file` の値が空、`#record-confirm` が `hidden` |
 | 8 | 「履歴」へ遷移し `.history-item` が0件、`#history-delete-all` が `disabled` |
 | 9 | `GET /api/voices/current` が `404` |
