@@ -2,14 +2,14 @@
 
 | 項目 | 内容 |
 |---|---|
-| 契約ID | PHASE3（T-301〜T-313 の統合契約） |
+| 契約ID | PHASE3（T-301〜T-314 の統合契約） |
 | 文書所有者 | Claude（唯一の指揮官）。本文書の変更はClaudeのみが行う |
 | 実装担当 | Codex |
 | 上位文書 | `docs/implementation-plan.md` §7 Phase 3 / §8、`docs/system-specification.md` §6・§7・§9・§10・§11 |
 | 参照文書 | `docs/gate-records.md` §1（G2判定）、`docs/task-contract-phase1.md`、`docs/task-contract-phase2.md` |
 | 前提ゲート | **G2 合格済み**（2026-08-10 / HEAD `7fc2423` / `pytest -q` 177 passed・6 skipped、`ruff check .` 指摘ゼロ、実モデル契約 5 passed・1 skipped） |
 | ブランチ | `agent/phase3-api-ui`（**Git操作は全てClaudeが実施。Codexはgitコマンドを一切実行しない**） |
-| 見積 | 合計60h（T-301 4h / T-302 1h / T-303 8h / T-304 3h / T-305 6h / T-306 3h / T-307 4h / T-308 6h / T-309 4h / T-310 6h / T-311 4h / T-312 3h / T-313 8h） |
+| 見積 | 合計63h（T-301 4h / T-302 1h / T-303 8h / T-304 3h / T-305 6h / T-306 3h / T-307 4h / T-308 6h / T-309 4h / T-310 6h / T-311 4h / T-312 3h / T-313 8h / **T-314 3h**（改訂4で追加）） |
 
 本契約は実装計画 §7 Phase 3 の13タスクを1文書に統合したものである。
 **本契約は実装計画に定義された機能のみを対象とし、新機能を追加しない。**
@@ -33,6 +33,7 @@ T-301（FastAPI基盤・エラー基盤・起動スクリプト）
         ├→ T-310（テキスト入力・読み修正UI。T-305完了後）→ T-311（進行・再生・DL UI）※同一ファイル・順次
         └→ T-312（履歴UI。T-306完了後）
               └→ T-313（E2E。T-307〜T-312完了後）
+                    └→ T-314（プロフィール削除UI。T-304・T-313完了後 / 改訂4で追加）
 ```
 
 **並行可能な組み合わせ**（互いに素なファイルのみ）:
@@ -44,6 +45,7 @@ T-301（FastAPI基盤・エラー基盤・起動スクリプト）
 | 3 | T-307（単独） |
 | 4 | {T-308} / {T-309} / {T-310→T-311} / {T-312} の4系列を並行可 |
 | 5 | T-313（単独） |
+| 6 | T-314（単独。G4 判定前に完了させる） |
 
 - **T-301 が最初。** T-301 は `src/koeclone/errors.py` と `src/koeclone/config.py` を変更するため、
   他の全タスクは T-301 完了後に着手する。
@@ -1167,6 +1169,230 @@ src/koeclone/web/js/api.js
 
 ---
 
+### 2.14 T-314: 音声プロフィール削除UI（3h）
+
+**目的**: 画面から音声プロフィールの削除を確定できるようにする（仕様 §4 スコープ6「1件の音声プロフィールの
+作成・再録音・再アップロード・**削除**」／ AC-09「**利用者が**プロフィール削除を確定する」／ FR-113）。
+
+#### 2.14.0 位置づけ（Codexは必ず先に読むこと）
+
+- 本タスクは **新機能ではない。** 仕様 §4 スコープ6 と AC-09 に既に含まれている要件であり、
+  **Phase 3 契約 §2.7〜§2.12 のUIタスク分解にプロフィール削除UIを書き落とした Claude の契約起草漏れ**を
+  補完するものである（`docs/gate-records.md` §2.6-1）。Codex側の逸脱ではない。
+- したがって **§5「仕様との差分」には追加しない。** 本タスクは仕様との差分ではなく契約の欠落補填である。
+- サーバー側は **T-304 で実装済み**。**本タスクで `src/koeclone/api/**` を一切変更しない。**
+  新しいエンドポイント・新しいデータ項目を作らない（必要だと判断したら §0.6-5 で停止して報告）。
+- G3 は本タスクの完了を条件とする**条件付き合格**であり、**G4 判定前に完了・検証する**。
+
+**依存**: T-304（`DELETE /api/voices/current`）, T-307（UI基盤）, T-308, T-309, T-311, T-312, T-313（すべて完了済み）
+**段**: 6（単独。並行タスクなし）
+
+#### 2.14.1 所有ファイル
+
+| 区分 | ファイル | 権限 |
+|---|---|---|
+| 新規作成 | `src/koeclone/web/js/profile.js` | 全体を所有 |
+| 既存へ追記 | `src/koeclone/web/index.html` | §2.14.2 のマークアップ追加のみ |
+| 既存へ追記 | `src/koeclone/web/style.css` | §2.14.7 の1ルールのみ |
+| 既存へ追記 | `src/koeclone/web/js/app.js` | 初期化リストに1行追加のみ |
+| 既存へ追記 | `src/koeclone/web/js/record.js` / `upload.js` / `synthesis.js` / `history.js` | §2.14.5 の表に定めるイベント購読のみ（各1〜3行） |
+| 既存へ追記 | `tests/e2e/test_flows.py` | §2.14.8 のシナリオ追加・改訂のみ |
+
+**T-307〜T-313 の所有ファイルへ例外的に追記を許可する**が、許可範囲は上表と §2.14.5 / §2.14.8 に
+明記した箇所に限る。**既存の関数・既存の振る舞いを書き換えない**（追加のみ。§0.4 の変更禁止ファイルは対象外のまま）。
+
+#### 2.14.2 UI配置とマークアップ（`index.html`）
+
+配置先は **`#register` セクションの先頭**（`<p class="lead">…</p>` の直後、`<div class="mode-tabs">` の直前）。
+理由: 仕様 §4 スコープ6 が「作成・再録音・再アップロード・削除」を1つのまとまりとして定義しており、
+削除後の導線（再登録）が同一セクション内で完結するため。**5番目のタブ／ステップを増やさない。**
+
+```html
+<section id="profile-card" class="workspace-card" aria-labelledby="profile-card-title" hidden>
+  <h2 id="profile-card-title">登録済みの声</h2>
+  <p id="profile-summary"></p>
+  <p class="note">削除すると、参照音声・同意録音・生成した音声とサイドカー・生成履歴がすべて消えます。元に戻せません。</p>
+  <button id="profile-delete" class="danger" type="button">登録した声を削除</button>
+</section>
+<p id="profile-status" role="status" tabindex="-1"></p>
+<div id="profile-error" class="alert" role="alert" hidden></div>
+```
+
+- **`#profile-status` と `#profile-error` は `#profile-card` の外に置く。**
+  カードは削除成功時・未登録時に `hidden` になるため、内側に置くと完了メッセージとエラーが見えなくなる。
+- `#profile-status` に `hidden` を使わない（`role="status"` のライブリージョンは常時DOMに存在させる）。
+  空のときの余白は §2.14.7 のCSSで消す。
+- 見出しは `<h2>`。`#register` の `<h1 id="register-title">` の直下階層であり、見出しレベルを飛ばさない。
+- `#profile-summary` の文言: `` `${display_name}（登録日時: ${created_at のローカル表示}）` ``。
+  日時整形は `history.js` と同じ `Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" })` を使う。
+
+#### 2.14.3 表示条件（`GET /api/voices/current`）
+
+`initProfile()` は次のタイミングで `GET /api/voices/current` を呼ぶ。
+
+1. 初期化時
+2. `koeclone:section` イベントの `detail.name === "register"` のとき
+
+| 応答 | `#profile-card` | `#profile-error` | `#profile-status` |
+|---|---|---|---|
+| `200` | 表示（summary を更新） | 非表示 | **空にする**（過去の削除完了文言を残さない） |
+| `404 ERR_PROFILE_NOT_FOUND` | 非表示 | 非表示 | **変更しない** |
+| その他（500 / 通信断など） | 非表示 | `errorMessage(error)` を表示 | **変更しない** |
+
+- **未登録（404）はエラーではない。** `#profile-error` に出さない。既存の `<p class="lead">` の案内が
+  登録導線として機能するため、追加の文言を出さない。
+- 404 で `#profile-status` を変更しないのは、削除直後に本ルーチンが再実行されても
+  完了メッセージ（§2.14.5）が消えないようにするため。
+
+#### 2.14.4 確認ダイアログ（文言を確定する）
+
+`window.confirm()` を使う。**カスタムモーダルを新規実装しない**（既存の「すべて削除」（§2.12）と同じ方式に揃え、
+フォーカストラップ等を自作しないことでアクセシビリティ上の退行を避ける）。
+
+表示文言は次のとおりとし、`{display_name}` に `GET /api/voices/current` の `display_name` を埋める。
+
+```text
+音声プロフィール「{display_name}」を削除します。
+参照音声・同意録音・生成した音声とサイドカー・生成履歴がすべて削除され、元に戻せません。
+削除しますか？
+```
+
+- 改行は `\n` で入れる（3行）。
+- **キャンセル時（`false`）は `DELETE` を呼ばず、画面を一切変更しない。**
+- 確認は**1回**。FR-004 の2段階確認はアップロードの権利確認に対する要件であり、削除には適用しない。
+
+#### 2.14.5 削除の実行と成功後の初期化
+
+**実行**: `apiJson("DELETE", "/voices/current")`（`api.js` は `204` を `null` として返す。**`api.js` を変更しない**）。
+送信中は `#profile-delete` を `disabled` にして二重送信を防ぐ。
+
+**成功後の処理順（この順序を守る）**:
+
+1. `document.dispatchEvent(new CustomEvent("koeclone:profile-deleted"))`
+2. `#profile-card` を `hidden = true`、`#profile-error` を `hidden = true`
+3. `document.querySelector('[data-section="register"]').click()` で「声の登録」へ遷移
+   （`record.js` / `upload.js` が既に使っているセクション遷移方法に揃える）
+4. `#profile-status` に完了文言を設定し、**その後**に `#profile-status.focus()` を呼ぶ
+   （空要素は §2.14.7 のCSSで `display: none` になるため、テキスト設定より前にフォーカスしない）
+
+手順3が §2.14.3 の再取得（404）を誘発するが、404 は `#profile-status` を変更しないため完了文言は残る。
+
+**各モジュールの購読（追記を許可する唯一の箇所）**:
+
+| ファイル | `koeclone:profile-deleted` で行う処理 |
+|---|---|
+| `record.js` | 既存の `reset()` を呼び、`start.disabled` を同意状態に戻す（既存 `discard` ハンドラと同じ2行）。録音ドラフト（`draftId` / `blob` / 試聴 `<audio>` / 「この声で確定」）が消える |
+| `upload.js` | 既存の `reset()` を呼ぶ。ファイル選択・権利確認2件・`draftId`・試聴・「この声で確定」が消える |
+| `synthesis.js` | `pollGeneration` を1増やして進行中のポーリングを無効化し、`progress.hidden = true`、既存の `clearOutput()` を呼ぶ（プレイヤー `src` 除去・非表示、ダウンロードリンク非表示、エラー非表示） |
+| `history.js` | 既存の `loadHistory()` を呼ぶ。一覧が空になり「すべて記録削除」ボタンが `disabled` になる |
+| `profile.js` | 上記 手順2〜4 |
+
+- **`#synthesis-text` の本文と読み修正一覧は消さない。** 利用者が入力した文章はプロフィール由来のデータではなく、
+  削除対象（AC-09）に含まれない。`#ai-disclosure` のチェック状態も変更しない。
+- 進行中のポーリングを止めるのは、削除でジョブが消えて `GET /api/syntheses/{id}` が `404` になり、
+  無効なエラーを表示し続けるため（リーク禁止＝§2.11 の方針を踏襲）。
+
+#### 2.14.6 エラー処理（404 / その他）
+
+| 事象 | 扱い |
+|---|---|
+| `DELETE` が `204` | §2.14.5。`#profile-status` = 「音声プロフィールを削除しました。参照音声・生成した音声・履歴もすべて削除されています。」 |
+| `DELETE` が `404 ERR_PROFILE_NOT_FOUND` | **エラー表示にしない。** §2.14.5 と同じ初期化を実行し、`#profile-status` = 「音声プロフィールは既に削除されています。」（別タブ・別操作で先に削除された場合の競合。利用者から見た結果は同じなので、失敗として提示しない） |
+| その他（500 / 通信断など） | `#profile-error` に `errorMessage(error)` を表示。**カードは表示したまま**、`#profile-delete` を再度有効化して再試行できるようにする。`koeclone:profile-deleted` は**発火しない**（実際には消えていないため） |
+
+**エラーを握りつぶさない**（§2.7）。`catch` して何も表示しない実装は契約違反。
+
+#### 2.14.7 アクセシビリティ
+
+- 見出し階層を飛ばさない（`#register` の `h1` → カードの `h2`）。§2.14.2 のとおり。
+- 削除ボタンのアクセシブル名は **「登録した声を削除」**。履歴の「削除」「すべて削除」と重複しない文言にする
+  （E2E の `get_by_role("button", name=...)` が曖昧一致で誤爆しないようにするため）。
+- `#profile-status` は `role="status"`（polite）、`#profile-error` は `role="alert"`（assertive）。
+- 削除完了後は `#profile-status` へフォーカスを移す（`tabindex="-1"`）。
+  スクリーンリーダー利用者が、消えたカードではなく結果に着地するようにする。
+- `:focus-visible` の既存アウトライン（`style.css:21`）を打ち消さない。`outline: none` を書かない。
+- 新しい色を定義しない。注意文は既存トークン `var(--muted)` を使う（`.rule-card p` と同一の配色で、
+  カード背景 `#fafaf6` に対し 4.5:1 以上を満たす）。
+- 追加するCSSは**次の1ルールのみ**:
+
+```css
+#profile-status:empty { display: none; }
+#profile-status { margin: .75rem 0; color: var(--muted); line-height: 1.6; }
+#profile-card .note { margin: 0; color: var(--muted); line-height: 1.6; }
+```
+
+#### 2.14.8 E2E 追加項目（`tests/e2e/test_flows.py`）
+
+**(a) 既存シナリオ10 `test_profile_delete_removes_history_and_audio` の改訂（必須）**
+
+- 削除の確定を `page.request.delete(...)` から **UI操作**（`#profile-delete` ＋ ダイアログ承諾）に置き換える。
+- 「UI にプロフィール削除の操作要素が存在しないため…T-314」の申し送りコメント（現行 206〜207行目）を削除する。
+- 削除後の `GET /api/voices/current` → `404`、`GET /api/syntheses/{id}` → `404`、`.../audio` → `404` の
+  3件の検証と、リロード後に履歴が空であることの検証は**そのまま残す**（AC-09 の証跡）。
+
+**(b) 新規シナリオ11 `test_profile_delete_from_ui_resets_screens`（必須）**
+
+シナリオ10がリロードを挟むのに対し、本シナリオは**リロードせずに**画面が初期化されることを検証する
+（リロードすれば何もしなくても初期化されてしまうため、シナリオ10だけでは §2.14.5 を検証できない）。
+
+| # | 手順・検証 |
+|---|---|
+| 1 | `_register_upload(...)` → `_generate(page, "削除後に画面が初期化されること。")` |
+| 2 | 「声の登録」へ遷移し、`#profile-card` が可視、`#profile-summary` に「マイボイス」が含まれること |
+| 3 | **キャンセル経路**: `page.once("dialog", lambda d: d.dismiss())` → `#profile-delete` をクリック → `#profile-card` が可視のまま、`GET /api/voices/current` が `200` |
+| 4 | **ダイアログ文言**: 承諾時に `dialog.message` を捕捉し、「マイボイス」と「元に戻せません」を含むこと |
+| 5 | 承諾 → **リロードせずに** `#profile-card` が `hidden`、`#profile-status` が「音声プロフィールを削除しました」を含む、`#profile-status` にフォーカスがあること |
+| 6 | 合成UI: `page.locator("#synthesis-player").evaluate("n => n.hidden && !n.getAttribute('src')")` が真。`#synthesis-download` も同様に `hidden` かつ `href` が前ジョブのURLでないこと |
+| 7 | 登録UI: `#upload-confirm` が `hidden`、`#voice-file` の値が空、`#record-confirm` が `hidden` |
+| 8 | 「履歴」へ遷移し `.history-item` が0件、`#history-delete-all` が `disabled` |
+| 9 | `GET /api/voices/current` が `404` |
+
+- **手順6は `to_be_hidden()` で代用しない。** 削除後は `#synthesis` セクション自体が `hidden` になるため、
+  `to_be_hidden()` は実装が無くても成立してしまう（T-313 レビュー Major#3 と同種の欠陥）。
+  要素の `hidden` プロパティと `src` 属性を直接評価すること。
+- 固定 `sleep` を使わない。条件待ち（`expect` / `wait_for`）を使う（§2.13 と同じ）。
+
+#### 2.14.9 RED / GREEN / REFACTOR
+
+- **RED**: 先に §2.14.8(b) のシナリオ11を書き、`#profile-delete` が存在しないことによる失敗を確認する。
+  失敗出力（セレクタ未検出）を報告に含める。続いて (a) の改訂を行い、同じく失敗を確認する。
+- **GREEN**: `profile.js` の新規作成と §2.14.1 の追記で2シナリオを通す最小実装。
+- **REFACTOR**: **なし。** 純関数の切り出しは行わない。JSユニットテストの実行基盤が本リポジトリに存在せず
+  （`tests/` は pytest のみ、`package.json` なし）、検証されない抽象を増やさないため。
+  JS実行基盤の追加が必要だと判断した場合は §0.6-3 で停止して報告する。
+
+#### 2.14.10 検証と完了条件
+
+**検証コマンド（すべて実行し、実出力を報告する）**:
+
+```bash
+pytest tests/e2e -q          # 既存10シナリオ + 新規1シナリオ
+pytest -q                    # 全体回帰（失敗0）
+ruff check .                 # 指摘ゼロ
+```
+
+**完了条件（全て満たすこと）**:
+
+1. `pytest tests/e2e -q` が全シナリオ成功（シナリオ10がUI操作経由で成功、シナリオ11が成功）。
+2. `pytest -q` に失敗が無く、G3 判定時から失敗が増えていない。
+3. `ruff check .` の指摘がゼロ。
+4. Claude の手動確認: 画面から削除 → カード消滅・完了メッセージ表示・履歴が空・プレイヤーが消える。
+   リロード後も `GET /api/voices/current` が `404`。
+5. Claude の差分レビュー: `src/koeclone/api/**` と §0.4 の変更禁止ファイルが無変更、
+   新規エンドポイント無し、外部CDN・外部フォント・外部画像の参照無し（S-11）、
+   既存所有ファイルへの追記が §2.14.1 の表と §2.14.5 / §2.14.8 の範囲内。
+6. レビューで Blocking / Major の指摘がゼロ。
+
+**禁止事項（違反は差戻し）**:
+
+- `src/koeclone/api/**` の変更、新しいAPIエンドポイント・データ項目の追加。
+- 5番目のタブ／ステップの追加、既存セクション構成の変更。
+- 履歴の「削除」「すべて削除」の既存挙動の変更。
+- `window.confirm` に代わるカスタムモーダルの新規実装。
+- `api.js` の共通関数の変更。
+
+---
+
 ## 3. 起動コマンド（M4 Mac ローカル）
 
 ```bash
@@ -1284,3 +1510,20 @@ Codex から T-303 の未定義・矛盾6件の報告を受け、Claude が **§
 | # | 論点 | 裁定 | 変更箇所 |
 |---|---|---|---|
 | 7 | RED#11（確定後 `paths.temporary` が空）は、テスト文ジョブが `paths.temporary` に作業ディレクトリを作るため競合で不安定になる | 検査前に `app.state.queue.wait_for(test_synthesis_id)` でジョブ終了を待つことを必須化 | §2.3 RED#11 |
+
+### 2026-08-12 改訂4（G3 条件付き合格の条件対応 / T-314 の新設）
+
+G3 レビューで、**画面に音声プロフィール削除の操作要素が存在しない**ことを検出した
+（`docs/gate-records.md` §2.6-1）。仕様 §4 スコープ6 と AC-09 は利用者による削除確定を要求しており、
+API（T-304）は実装済みである一方、**本契約 §2.7〜§2.12 のUIタスク分解に削除UIを含めていなかった**。
+原因は Claude の契約起草漏れであり、Codex の逸脱ではない（§0.6-5 は契約外の画面機能追加を禁じている）。
+
+| # | 内容 | 裁定 | 変更箇所 |
+|---|---|---|---|
+| 1 | プロフィール削除UIがどのタスクにも属していない | **T-314 として新設**（3h）。UI配置・確認文言・成功後の初期化・404/エラー・A11y・E2E追加項目まで契約で確定し、Codex が推測で設計する余地を残さない | §2.14 新設 |
+| 2 | 本追加が「仕様との差分」に見える | **差分ではない。** 仕様 §4 スコープ6・AC-09 に既にある要件の実装であり、**§5 には追加しない**ことを明記 | §2.14.0 |
+| 3 | 削除後の画面初期化が複数モジュール（record / upload / synthesis / history）に跨る | 既存の `koeclone:synthesis-job` と同じ **`document` の CustomEvent 方式**（`koeclone:profile-deleted`）で各モジュールが自分の既存 reset を呼ぶ。他タスク所有ファイルへの追記は各1〜3行の購読のみに限定 | §2.14.5 |
+| 4 | T-313 シナリオ10 は削除を生APIで実行しており、UIが出来ても検証されない | シナリオ10 を **UI操作経由へ改訂**し、申し送りコメントを削除。加えて**リロードせずに**画面が初期化されることを検証するシナリオ11を新設（リロードすれば実装が無くても初期化されてしまうため） | §2.14.8 |
+
+**コード変更前**の改訂であり、既存の実装・テストへの新規要求は T-314 の範囲に限られる。
+本改訂に伴い、契約IDを T-301〜T-314、見積を合計63h、依存グラフに段6を追加した。
