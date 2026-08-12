@@ -260,3 +260,114 @@ ACを実質検証していない（空振りする）」類のものである。
 
 よって **G3 を条件付き合格と判定する**。条件は §2.6-1 の T-314（プロフィール削除UI）の完了であり、
 **G4 判定前に完了・検証すること**を必須とする。Phase 4（T-401 以降）の着手は許可する。
+
+---
+
+### 2.9 追補: G3 条件の解消（T-314 完了 / 2026-08-12）
+
+本節は §2.1〜§2.8 の判定記録を**書き換えず追補する**もので、§2.6-1 に記録した条件（T-314）の
+解消を確定させる。判定日時点（HEAD `f5be6e5`）の記述はその時点の事実として保存する。
+
+| 項目 | 内容 |
+|---|---|
+| 追補日 | 2026-08-12 |
+| 判定者 | Claude（指揮官） |
+| 対象 | §2.6-1 条件 #1（音声プロフィール削除のUI導線が存在しない） |
+| 解消コミット | `f6204a3 feat(ui): add voice profile deletion flow` |
+| 追補時HEAD | `f6204a3`（ブランチ `agent/phase3-api-ui`・作業ツリーclean・origin へ push 済み） |
+| 結論 | **条件解消。G3 を無条件合格へ移行する** |
+
+#### 2.9.1 契約 §2.14.10 完了条件6件の充足状況
+
+| # | 完了条件 | 結果 | 証跡（Claudeが実行） |
+|---|---|---|---|
+| 1 | E2E 全シナリオ成功（10がUI操作経由・11が成功） | 充足 | `pytest tests/e2e -q` → **11 passed in 38.43s** |
+| 2 | `pytest -q` に失敗なし・G3 判定時から失敗が増えていない | 充足 | `pytest -q` → **249 passed, 6 skipped in 42.62s**（判定時 248 passed から E2E 1件増、失敗0で不変） |
+| 3 | `ruff check .` 指摘ゼロ | 充足 | `All checks passed!` / `ruff format --check tests/e2e` → `3 files already formatted` |
+| 4 | Claude の手動確認 | 充足 | §2.9.3 |
+| 5 | Claude の差分レビュー（範囲逸脱なし） | 充足 | §2.9.2 |
+| 6 | Blocking / Major 指摘ゼロ | 充足 | §2.9.4（Major 0件。Minor 2件は本追補内で是正済み） |
+
+#### 2.9.2 差分レビュー（契約 §2.14.1 の追記範囲）
+
+`git show --stat f6204a3` の9ファイルはすべて §2.14.1 の所有表の範囲内である。
+
+| ファイル | 変更 | 契約上の許可 |
+|---|---|---|
+| `web/js/profile.js` | 新規68行 | 全体所有 |
+| `web/index.html` | +8行 | §2.14.2 のマークアップと一致（配置も `<p class="lead">` 直後・`.mode-tabs` 直前） |
+| `web/style.css` | +3行 | §2.14.7 の3行と一致。`outline: none` の追加なし・新規色の定義なし |
+| `web/js/app.js` | +1行 | 初期化リストへの1行追加のみ |
+| `web/js/record.js` | +4行（実処理2文） | §2.14.5 の「既存 `discard` ハンドラと同じ2行」と同一式 |
+| `web/js/upload.js` | +1行 | 既存 `reset` の購読のみ |
+| `web/js/synthesis.js` | +4行 | §2.14.5 の裁定どおり（`pollGeneration++` / `progress.hidden` / `clearOutput()` / `download.removeAttribute("href")`） |
+| `web/js/history.js` | +1行 | 既存 `loadHistory` の購読のみ |
+| `tests/e2e/test_flows.py` | シナリオ10改訂・11新設 | §2.14.8 |
+
+禁止事項の確認: `src/koeclone/api/**`・`domain/**`・`storage/**`・`engines/**`・`media/**`・`worker/**`・
+`errors.py`・`config.py`・`pyproject.toml`・`uv.lock`・`api.js` はいずれも**無変更**
+（`git status --porcelain` が空）。新規エンドポイントなし（`profile.js` が呼ぶのは既存の
+`GET` / `DELETE /api/voices/current` のみ）。5番目のタブ・ステップの追加なし。
+`window.confirm` を使用しカスタムモーダルなし。S-11 は `index.html` / `style.css` / `js/*.js` を
+`https?://` ・ `@import` ・ `integrity=` ・ `crossorigin` ・ `fonts.` で走査し**該当ゼロ**を確認した。
+
+#### 2.9.3 手動確認（実サーバー + Chromium・Claude実施）
+
+`scripts/run.sh` を `KOECLONE_ENGINE=fake` と一時 `KOECLONE_DATA_DIR` で起動し、
+pytest のフィクスチャを経由せずに Chromium で通し操作した実測値。
+
+| 段階 | 実測 |
+|---|---|
+| 登録・生成後 | `GET /api/voices/current` = 200 / 履歴 2件 / `#profile-summary` = `マイボイス（登録日時: 2026/08/12 9:28）` |
+| キャンセル | カード可視のまま・summary 不変・`#profile-status` 空・`GET /api/voices/current` = 200・履歴 2件（画面が一切変わらない） |
+| ダイアログ文言 | `音声プロフィール「マイボイス」を削除します。` / `参照音声・同意録音・生成した音声とサイドカー・生成履歴がすべて削除され、元に戻せません。` / `削除しますか？`（3行） |
+| 確定後（**リロードなし**） | カード `hidden=True` / `#profile-status` = 完了文言 / `document.activeElement.id` = `profile-status` / 可視セクション = `register` |
+| 同（合成UI） | player `[hidden=True, src=None]` / download `[hidden=True, href=None]` |
+| 同（登録UI） | `#upload-confirm` hidden / `#voice-file` 空 / `#record-confirm`・`#record-discard`・`#record-error` hidden / `#record-start` 有効 |
+| 同（履歴） | `.history-item` 0件・`#history-delete-all` disabled（**遷移前**の時点で） |
+| 同（非削除対象） | `#synthesis-text` の本文は保持（契約 §2.14.5 のとおり） |
+| API | `GET /api/voices/current` = 404 / `GET /api/syntheses/{id}` = 404 / `.../audio` = 404 / `GET /api/syntheses` の `items` = `[]` |
+| リロード後 | `GET /api/voices/current` = 404 / カード hidden / `#profile-error` hidden / 履歴 0件 |
+| データ | `KOECLONE_DATA_DIR` 配下に `.wav` / `.json` が**0件**（AC-09） |
+
+これにより §2.1 の受入条件 #8（UC-03）の「充足（限定）」と #9（AC-09 のUI導線）の留保が解消された。
+削除確定は画面操作のみで完結し、API 直叩きを必要としない。
+
+#### 2.9.4 T-314 レビューで検出した指摘と是正
+
+| # | 重大度 | 内容 | 対応 |
+|---|---|---|---|
+| 1 | Minor（テストの空振り） | シナリオ11 手順8 は「履歴へ遷移してから 0件」を見るが、遷移が `koeclone:section` で `loadHistory()` を再実行するため、`history.js` の `koeclone:profile-deleted` 購読を外しても成立した（変異検証で確認）。加えてシナリオ11 は削除前に履歴を開かないため、初期化時（0件時点）の描画が残り 0件検証自体が無条件に成立していた | Claude が `tests/e2e/test_flows.py` 内のみで是正。削除前に履歴を開いて **2件**の描画を確定させ、削除後は**遷移前**に 0件・`#history-delete-all` disabled を検証する行を追加した |
+| 2 | Minor（テストの空振り） | シナリオ11 手順7 の `#record-confirm` hidden は、登録がアップロード経由で録音ペインが未使用のため元から hidden であり、`record.js` の購読を外しても成立した（変異検証で確認） | Claude が同ファイル内のみで是正。削除前に10秒未満の録音停止でクライアント側長さエラーを起こし `#record-error` / `#record-discard` を可視にしてから、削除後に**要素自身の `hidden` プロパティ**で初期化を検証する（`to_be_hidden()` は祖先が隠れても成立するため使わない。契約 §2.14.8 手順6 と同じ理由） |
+| 3 | Nit（受容） | `record.js` の追記は物理4行で、§2.14.1 の「各1〜3行」の字面を超える | 是正不要。実処理は §2.14.5 が指定する2文（`reset()` と `start.disabled`）そのもので、既存 `discard` ハンドラ（`record.js:125`）と同一式。差は購読ラッパの整形のみ |
+| 4 | Nit（受容） | `profile.js` の `loadProfile()` 200 経路に契約非明記の `deleteButton.disabled = false` がある | 是正不要。削除後の再登録時にボタンが `disabled` のまま残る退行を防ぐために必要。§2.14.6 のエラー時再有効化と整合する |
+
+**Major / Blocking は0件。** 指摘1・2 は契約 §2.14.8 が定めたシナリオ設計自体の空振りであり、
+Codex の実装逸脱ではない（実装側5件の購読はいずれも契約どおり存在した）。
+是正は許可ファイル `tests/e2e/test_flows.py` の中だけで行い、実装コードには手を入れていない。
+
+#### 2.9.5 変異検証（シナリオ11 が実装を実質検証することの証跡）
+
+「テストが実装なしでも通る」欠陥（§2.6 の T-313 Major#3 と同種）を排除するため、
+`koeclone:profile-deleted` の購読を1件ずつ外して
+`pytest tests/e2e/test_flows.py::test_profile_delete_from_ui_resets_screens` を実行した。
+
+| 除去した購読 | 是正前 | 是正後 |
+|---|---|---|
+| `synthesis.js`（`download.removeAttribute("href")`） | FAIL（検出） | FAIL（検出） |
+| `upload.js`（`reset`） | FAIL（検出） | FAIL（検出） |
+| `record.js`（`reset` + `start.disabled`） | **PASS（見逃し）** | FAIL（検出） |
+| `history.js`（`loadHistory`） | **PASS（見逃し）** | FAIL（検出） |
+| `profile.js`（`status.focus()`） | FAIL（検出） | FAIL（検出） |
+| `profile.js` ファイルごと削除 → シナリオ10 | FAIL（検出。UI経由であることの証跡） | 同左 |
+
+是正後は5件すべての購読が単独で検出される。一時改変はいずれも検証後に復元し、
+`git diff` が期待どおり（T-314 の追記のみ）であることを確認している。
+
+#### 2.9.6 結論
+
+契約 §2.14.10 の完了条件6件をすべて充足し、§2.6-1 の条件 #1 は解消した。
+Major / Blocking の未是正指摘は無い。
+
+よって **G3 の条件付き合格を解除し、無条件合格とする**。G4 判定への前提条件は残っていない。
+§2.7 の Phase 4 申し送り（Minor 以下7件）は引き続き有効であり、本追補で新たな申し送りは追加しない。
